@@ -11,6 +11,7 @@ use claviron::edge::{
     Host, HostConfig, Routable, RouteProtocol, VhostResolver,
 };
 use claviron::http::deadline::head_within;
+use claviron::http::ext::ConnCtx;
 use claviron::http::policy::HttpPolicy;
 use claviron::http::{
     RouteBody, RouteResponse, ServiceResult, bytes_body, empty_body,
@@ -337,7 +338,12 @@ async fn enroll(
         );
         return response;
     }
+    let client = request
+        .extensions()
+        .get::<Arc<ConnCtx>>()
+        .map(|connection| connection.real_ip.unwrap_or(connection.remote.ip()));
     if request.headers().contains_key(header::ORIGIN) {
+        tracing::warn!(?client, "gRPC registration refused a browser request");
         return reply(StatusCode::FORBIDDEN, empty_body());
     }
     if request
@@ -374,12 +380,27 @@ async fn enroll(
     let user = match guard.authorize(&input.username, &input.password).await {
         Ok(user) => user,
         Err(AccessError::Unauthenticated) => {
+            tracing::warn!(
+                ?client,
+                username = ?input.username,
+                "gRPC registration did not accept the credentials"
+            );
             return reply(StatusCode::UNAUTHORIZED, empty_body());
         }
         Err(AccessError::Forbidden) => {
+            tracing::warn!(
+                ?client,
+                username = ?input.username,
+                "gRPC registration is forbidden for this account"
+            );
             return reply(StatusCode::FORBIDDEN, empty_body());
         }
         Err(AccessError::Unavailable) => {
+            tracing::warn!(
+                ?client,
+                username = ?input.username,
+                "gRPC registration could not reach its access policy"
+            );
             return reply(StatusCode::SERVICE_UNAVAILABLE, empty_body());
         }
     };
@@ -396,6 +417,11 @@ async fn enroll(
     };
     match result {
         Ok(issued) => {
+            tracing::info!(
+                ?client,
+                username = ?input.username,
+                "gRPC registration issued a client certificate"
+            );
             let Ok(body) = serde_json::to_vec(&RegistrationResponse {
                 management_address,
                 issued,
@@ -412,7 +438,14 @@ async fn enroll(
         }
         Err(error) => {
             let status = match error.code() {
-                Code::AlreadyExists => StatusCode::CONFLICT,
+                Code::AlreadyExists => {
+                    tracing::warn!(
+                        ?client,
+                        username = ?input.username,
+                        "gRPC registration found an existing certificate"
+                    );
+                    StatusCode::CONFLICT
+                }
                 Code::InvalidArgument => StatusCode::BAD_REQUEST,
                 Code::FailedPrecondition => {
                     tracing::warn!(
