@@ -46,7 +46,7 @@ the gRPC `dns` feature alone does not supply that deployment.
 ```toml
 [dependencies]
 claviron = { version = "0.2.0-alpha.25", default-features = false, features = ["edge", "tls", "postgres"] }
-claviron-grpc = { version = "0.2.0-alpha.25", features = ["server", "workers", "mtls", "certificates"] }
+claviron-grpc = { version = "0.2.0-alpha.25.1", features = ["server", "workers", "mtls", "certificates"] }
 ```
 
 ```rust
@@ -80,6 +80,10 @@ performs a new admission.
 
 The accepting transport validates the certificate before providing its exact
 public leaf DER, structured CNs and URI SAN candidates in `PeerIdentity`.
+Management is a native backend selected for the configured TLS/QUIC hosts.
+An accept layer prepares its access session in `ConnState`; requests borrow
+that connection through `HostContext`. The backend declares no identity export
+to request extensions. Its prepared scope supplies the HTTP head deadline.
 The policy receives only the verified `claviron::ssl::peer::PeerIdentity`;
 there is no client-selected service or target. Edge H2 and H3 use the same session
 admission, including reflection and capability discovery. Concurrent RPCs share

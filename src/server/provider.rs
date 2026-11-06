@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use claviron::edge::{
-    Host, HostBindingProvider, HostConfig, OtherService, RouteBinding,
-};
+use claviron::edge::pipeline::RouteProtocol;
+use claviron::edge::{Host, HostConfig, Routable};
+use claviron::pipeline::extension::RouteLayer;
 use claviron::runtime::congif::{
     self, ConfigFile, ConfigObserver, Configurable,
 };
@@ -13,8 +13,8 @@ use claviron::runtime::registry::{
 };
 use claviron::runtime::{AppState, Register};
 
+use super::backend::ManagementGrpcHandler;
 use super::config::{CONFIG_FILE, GrpcConfig};
-use super::other::ManagementGrpcHandler;
 
 /// The owner of `grpc.yaml`: binds the management service to the vhost keys the
 /// file names. Registered in every process; without the file the service
@@ -66,10 +66,7 @@ impl Register<AppState> for GrpcServiceProvider {
     fn register(state: &AppState) -> Result<()> {
         state.bind_config_environment::<Self>()?;
         let provider = Arc::new(Self::new(state));
-        claviron::edge::register_host_binding_provider(
-            state,
-            provider.clone(),
-        )?;
+        claviron::edge::register_routable(state, provider.clone())?;
         // A management connection's access session is prepared once, when the
         // connection is accepted, and read by each of its requests.
         let (hosts, accepting) = (provider.clone(), state.clone());
@@ -78,7 +75,7 @@ impl Register<AppState> for GrpcServiceProvider {
             move |host, _, _| hosts.config().vhosts().contains(host),
             move |accepted: &claviron::edge::Accepted<'_>,
                   conn: &mut claviron::http::ext::ConnStateBuilder| {
-                super::other::prepare_connection(
+                super::backend::prepare_connection(
                     &accepting,
                     accepted.connection,
                     conn,
@@ -183,7 +180,14 @@ impl Reloadable<AppState> for GrpcServiceProvider {
     }
 }
 
-impl HostBindingProvider for GrpcServiceProvider {
+impl Routable for GrpcServiceProvider {
+    fn match_protocol(
+        &self,
+        protocol: RouteProtocol,
+    ) -> bool {
+        matches!(protocol, RouteProtocol::Https | RouteProtocol::Quic)
+    }
+
     fn match_host(
         &self,
         key: &Host,
@@ -193,11 +197,12 @@ impl HostBindingProvider for GrpcServiceProvider {
         cfg.vhosts().contains(key)
     }
 
-    fn binding(
-        &self,
+    fn layers(
+        self: Arc<Self>,
+        state: &AppState,
         key: &Host,
         host: Arc<HostConfig>,
-    ) -> Result<Option<RouteBinding>> {
+    ) -> Result<Vec<Arc<dyn RouteLayer>>> {
         let host_key = key.to_string();
         let host_client_auth_required =
             host.tls_policy().client_auth.is_required();
@@ -207,17 +212,6 @@ impl HostBindingProvider for GrpcServiceProvider {
             )));
         }
 
-        let factory = Arc::new(
-            move |state: AppState, _host: Host, _host_cfg: Arc<HostConfig>| {
-                let service =
-                    state.registry_ref().resolve::<Self>().ok_or_else(
-                        || Error::msg("GrpcServiceProvider is not registered"),
-                    )?;
-                let handler = service.handler(state, host_key.clone())?;
-                Ok(OtherService::new(handler))
-            },
-        );
-
-        Ok(Some(RouteBinding::Other(factory)))
+        Ok(vec![Arc::new(self.handler(state.clone(), host_key)?)])
     }
 }

@@ -3,7 +3,8 @@ use crate::server::greeter::helloworld::{
     HelloReply, HelloRequest,
     greeter_server::{Greeter, GreeterServer},
 };
-use claviron::http::ext::{ClientAuthStatus, TlsInfo};
+use claviron::http::ext::{ClientAuthStatus, RequestArrival, TlsInfo};
+use claviron::pipeline::plan::{HostExecution, HostPipelineBuilder};
 use prost::Message;
 
 struct Echo;
@@ -24,18 +25,66 @@ impl Greeter for Echo {
     }
 }
 
-fn handler() -> ManagementGrpcHandler {
-    ManagementGrpcHandler::with_routes(
+struct Input {
+    request: Request<RouteBody>,
+    connection: Arc<ConnCtx>,
+}
+
+struct TestHost(HostExecution);
+
+impl TestHost {
+    async fn call(
+        &self,
+        input: Input,
+    ) -> Result<RouteResponse, std::convert::Infallible> {
+        assert!(input.request.extensions().get::<Arc<ConnCtx>>().is_none());
+        assert!(input.request.extensions().get::<HttpPolicy>().is_none());
+        self.0
+            .handle_in(
+                input.request,
+                Some(HostContext::new(
+                    &input.connection,
+                    RequestArrival::Established,
+                )),
+            )
+            .await
+    }
+}
+
+fn handler() -> TestHost {
+    handler_with_policy(HttpPolicy::unlimited())
+}
+
+fn handler_with_policy(policy: HttpPolicy) -> TestHost {
+    let owner = ManagementGrpcHandler::with_routes(
         tonic::service::Routes::new(GreeterServer::new(Echo)).prepare(),
         "management.example.test".to_owned(),
-    )
+    );
+    prepared(owner, policy)
+}
+
+fn prepared(
+    owner: ManagementGrpcHandler,
+    policy: HttpPolicy,
+) -> TestHost {
+    let config = Arc::new(
+        serde_yaml::from_str::<claviron::pipeline::Site>(
+            "root: .\ntry_files: false",
+        )
+        .unwrap(),
+    );
+    let scope =
+        PreparedScope { config: &config, policy, accepts_applications: true };
+    let mut layer = HostLayerBuilder::default();
+    owner.prepare_scoped(&mut layer, &scope).unwrap();
+    TestHost(HostPipelineBuilder::<()>::from(layer).build().into_execution())
 }
 
 /// A request on a connection accepted for a state with nothing registered.
 fn request(
     version: http::Version,
     verified: bool,
-) -> Request<RouteBody> {
+) -> Input {
     let state =
         claviron::runtime::AppState::standalone("grpc-admission-test", ".");
     accepted(&state, unaccepted(version, verified))
@@ -45,21 +94,19 @@ fn request(
 /// under `state` would, so its requests find what the handler reads.
 fn accepted(
     state: &claviron::runtime::AppState,
-    mut request: Request<RouteBody>,
-) -> Request<RouteBody> {
-    let mut connection =
-        ConnCtx::clone(request.extensions().get::<Arc<ConnCtx>>().unwrap());
+    mut input: Input,
+) -> Input {
+    let connection = Arc::get_mut(&mut input.connection).unwrap();
     let mut conn = claviron::http::ext::ConnStateBuilder::default();
-    prepare_connection(state, &connection, &mut conn);
+    prepare_connection(state, connection, &mut conn);
     connection.state = conn.build();
-    request.extensions_mut().insert(Arc::new(connection));
-    request
+    input
 }
 
 fn unaccepted(
     version: http::Version,
     verified: bool,
-) -> Request<RouteBody> {
+) -> Input {
     let proto = if version == http::Version::HTTP_3 {
         claviron::tls::Proto::H3
     } else {
@@ -69,11 +116,11 @@ fn unaccepted(
     let mut frame = vec![0]; // gRPC's uncompressed message flag.
     frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     frame.extend_from_slice(&payload);
-    let mut request = Request::builder().method("POST").version(version)
+    let request = Request::builder().method("POST").version(version)
         .uri("https://management.example.test/claviron.helloworld.Greeter/SayHello")
         .header("content-type", "application/grpc").header("te", "trailers")
         .body(claviron::http::bytes_body(frame.into())).unwrap();
-    request.extensions_mut().insert(Arc::new(ConnCtx {
+    let connection = Arc::new(ConnCtx {
         state: Default::default(),
         listener: "management".parse().unwrap(),
         proto: Some(proto),
@@ -98,8 +145,8 @@ fn unaccepted(
                 subject_uris: Box::new(["urn:example:subject:one".into()]),
             })),
         }),
-    }));
-    request
+    });
+    Input { request, connection }
 }
 
 #[tokio::test]
@@ -124,12 +171,70 @@ async fn grpc_h3_requires_verified_mtls_and_http1_remains_rejected() {
         assert_eq!(response.headers()["grpc-status"], "16");
     }
     let mut missing_context = request(http::Version::HTTP_3, true);
-    missing_context.extensions_mut().remove::<Arc<ConnCtx>>();
-    let response = handler().call(missing_context).await.unwrap();
+    missing_context.request.extensions_mut().insert(missing_context.connection);
+    let response = handler().0.handle(missing_context.request).await.unwrap();
     assert_eq!(response.headers()["grpc-status"], "16");
+    let response =
+        handler().call(unaccepted(http::Version::HTTP_2, true)).await.unwrap();
+    assert_eq!(response.headers()["grpc-status"], "13");
     let response =
         handler().call(request(http::Version::HTTP_11, true)).await.unwrap();
     assert_eq!(response.headers()["grpc-status"], "9");
+}
+
+#[cfg(feature = "metrics")]
+#[tokio::test]
+async fn metrics_uses_the_same_native_connection_admission() {
+    let state = AppState::standalone("grpc-metrics-test", ".");
+    state
+        .registry_ref()
+        .insert(Arc::new(claviron::runtime::metrics::MetricsProvider::new()))
+        .unwrap();
+    let metrics =
+        claviron::http::metrics::routes(&state).with_state(state.clone());
+    let routes = tonic::service::Routes::new(GreeterServer::new(Echo))
+        .into_axum_router()
+        .merge(metrics)
+        .into();
+    let owner = prepared(
+        ManagementGrpcHandler::with_routes(
+            routes,
+            "management.example.test".into(),
+        ),
+        HttpPolicy::unlimited(),
+    );
+    let input = |version, verified| {
+        let mut input = unaccepted(version, verified);
+        *input.request.method_mut() = http::Method::GET;
+        *input.request.uri_mut() = "/metrics".parse().unwrap();
+        *input.request.body_mut() = claviron::http::empty_body();
+        accepted(&state, input)
+    };
+    for version in [http::Version::HTTP_2, http::Version::HTTP_3] {
+        let response = owner.call(input(version, true)).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/plain; version=0.0.4"
+        );
+        let response = owner.call(input(version, false)).await.unwrap();
+        assert_eq!(response.headers()["grpc-status"], "16");
+    }
+    let policy = Arc::new(AccessCheck {
+        allow: std::sync::atomic::AtomicBool::new(false),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    state.registry_ref().insert(policy).unwrap();
+    state
+        .registry_ref()
+        .bind_dyn::<dyn crate::access::GrpcAccessPolicy, AccessCheck>(
+            |policy| policy,
+        )
+        .unwrap();
+    for version in [http::Version::HTTP_2, http::Version::HTTP_3] {
+        let response = owner.call(input(version, true)).await.unwrap();
+        assert_eq!(response.headers()["grpc-status"], "7");
+    }
 }
 
 #[tokio::test]
@@ -157,11 +262,10 @@ async fn grpc_response_head_uses_the_effective_http_deadline() {
             |value| value,
         )
         .unwrap();
-    let mut request = accepted(&state, unaccepted(http::Version::HTTP_2, true));
+    let request = accepted(&state, unaccepted(http::Version::HTTP_2, true));
     let mut policy = HttpPolicy::unlimited();
     policy.requests.head_timeout = Some(std::time::Duration::ZERO);
-    request.extensions_mut().insert(policy);
-    let response = handler().call(request).await.unwrap();
+    let response = handler_with_policy(policy).call(request).await.unwrap();
     assert_eq!(response.headers()["grpc-status"], "4");
 }
 
@@ -209,26 +313,25 @@ async fn grpc_access_policy_is_shared_by_h2_h3_connection_and_resets_on_reconnec
             .unwrap();
         let handler = handler();
         let first = accepted(&state, unaccepted(version, true));
-        let connection =
-            first.extensions().get::<Arc<ConnCtx>>().unwrap().clone();
+        let connection = first.connection.clone();
         let response = handler.call(first).await.unwrap();
         assert!(!response.headers().contains_key("grpc-status"));
         policy.allow.store(false, Ordering::SeqCst);
         let mut same_connection = request(version, true);
-        same_connection.extensions_mut().insert(connection);
+        same_connection.connection = connection;
         let response = handler.call(same_connection).await.unwrap();
         assert!(!response.headers().contains_key("grpc-status"));
         assert_eq!(policy.calls.load(Ordering::SeqCst), 1);
 
         let denied = accepted(&state, unaccepted(version, true));
-        let denied_connection =
-            denied.extensions().get::<Arc<ConnCtx>>().unwrap().clone();
+        let denied_connection = denied.connection.clone();
         let response = handler.call(denied).await.unwrap();
         assert_eq!(response.headers()["grpc-status"], "7");
         policy.allow.store(true, Ordering::SeqCst);
         let mut still_denied = request(version, true);
-        still_denied.extensions_mut().insert(denied_connection);
+        still_denied.connection = denied_connection;
         still_denied
+            .request
             .headers_mut()
             .insert("x-access-target", "allowed".parse().unwrap());
         let response = handler.call(still_denied).await.unwrap();

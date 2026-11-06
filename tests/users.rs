@@ -828,8 +828,11 @@ async fn management_single_tonic_service_routes_both_capabilities() {
 #[tokio::test]
 async fn management_gateway_supplies_the_policy_bound_actor_once() {
     use crate::access::{AccessError, GrpcAccessPolicy};
-    use claviron::edge::OtherHandler;
     use claviron::http::ext::{ClientAuthStatus, ConnCtx, TlsInfo};
+    use claviron::pipeline::{
+        HostContext,
+        plan::{Backend, HostPipelineBuilder},
+    };
     use claviron::ssl::peer::PeerIdentity;
     use http_body_util::BodyExt;
     use prost::Message;
@@ -859,7 +862,7 @@ async fn management_gateway_supplies_the_policy_bound_actor_once() {
     let routes =
         tonic::service::Routes::new(create_service(service.state.clone()))
             .prepare();
-    let handler = crate::server::other::ManagementGrpcHandler::with_routes(
+    let handler = crate::server::backend::ManagementGrpcHandler::with_routes(
         routes,
         "management.example.test".into(),
     );
@@ -869,7 +872,7 @@ async fn management_gateway_supplies_the_policy_bound_actor_once() {
     let mut frame = vec![0];
     frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     frame.extend_from_slice(&payload);
-    let mut request = http::Request::builder()
+    let request = http::Request::builder()
         .method("POST")
         .uri("/claviron.users.UserManagement/GetSchema")
         .version(http::Version::HTTP_2)
@@ -901,14 +904,32 @@ async fn management_gateway_supplies_the_policy_bound_actor_once() {
     };
     // Stand in for the edge: prepare the connection as its acceptance would.
     let mut conn = claviron::http::ext::ConnStateBuilder::default();
-    crate::server::other::prepare_connection(
+    crate::server::backend::prepare_connection(
         &service.state,
         &connection,
         &mut conn,
     );
     connection.state = conn.build();
-    request.extensions_mut().insert(Arc::new(connection));
-    let response = handler.call(request).await.unwrap();
+    let connection = Arc::new(connection);
+    let mut builder = HostPipelineBuilder::<()>::new();
+    builder
+        .layer(Backend::new(
+            handler,
+            claviron::http::policy::HttpPolicy::unlimited(),
+        ))
+        .unwrap();
+    let execution = builder.build().into_execution();
+    assert!(request.extensions().get::<Arc<ConnCtx>>().is_none());
+    let response = execution
+        .handle_in(
+            request,
+            Some(HostContext::new(
+                &connection,
+                claviron::http::ext::RequestArrival::Established,
+            )),
+        )
+        .await
+        .unwrap();
     let body = response.into_body().collect().await.unwrap();
     assert_eq!(body.trailers().unwrap().get("grpc-status").unwrap(), "0");
     assert_eq!(binding.0.load(Ordering::SeqCst), 1);

@@ -1,10 +1,16 @@
 use std::sync::Arc;
 
-use claviron::edge::OtherHandler;
 use claviron::http::deadline::head_within;
 use claviron::http::ext::{ClientAuthStatus, ConnCtx, ConnStateBuilder};
 use claviron::http::policy::HttpPolicy;
-use claviron::http::{RouteBody, RouteFuture, RouteResponse, boxed_body};
+use claviron::http::{RouteBody, RouteResponse, ServiceResult, boxed_body};
+use claviron::pipeline::extension::{PreparedScope, RouteLayer};
+use claviron::pipeline::layers::HostLayer;
+use claviron::pipeline::plan::{Backend, HostLayerBuilder};
+use claviron::pipeline::{
+    BackendContract, BackendHandler, BackendIdentity, BackendReply,
+    DispatchCall, DispatchStep, HostContext,
+};
 use claviron::runtime::AppState;
 use http::{Request, Response};
 use http_body_util::BodyExt;
@@ -29,79 +35,80 @@ impl ManagementGrpcHandler {
     }
 }
 
-impl OtherHandler for ManagementGrpcHandler {
-    fn name(&self) -> &'static str {
-        "management_grpc"
+impl BackendHandler for ManagementGrpcHandler {
+    fn contract(&self) -> BackendContract {
+        BackendContract {
+            identity: BackendIdentity::None,
+            reply: BackendReply::Owner,
+        }
     }
+}
 
-    fn times_its_head(&self) -> bool {
-        true
-    }
-
+impl DispatchStep for ManagementGrpcHandler {
     fn call(
         &self,
         mut req: Request<RouteBody>,
-    ) -> RouteFuture {
+        context: Option<HostContext<'_>>,
+    ) -> DispatchCall {
         let version = req.version();
         // Framing and TLS belong to the accepting Edge transport. Tonic's
         // service consumes the same request body/trailer contract on H2/H3.
         if !matches!(version, http::Version::HTTP_2 | http::Version::HTTP_3) {
-            return Box::pin(async move {
-                Ok(status_response(
+            return DispatchCall::ready(ServiceResult::Handled(
+                status_response(
                     Status::failed_precondition(
                         "management gRPC requires HTTP/2 or HTTP/3",
                     ),
                     version,
-                ))
-            });
+                ),
+            ));
         }
 
-        let conn_ctx = req.extensions().get::<Arc<ConnCtx>>();
+        let conn_ctx = context.map(|context| context.connection);
         let client_cert_present =
             conn_ctx.is_some_and(|ctx| verified_peer(ctx).is_some());
-        let conn_info = conn_ctx.map(|ctx| Arc::new(conn_info_from_ctx(ctx)));
         if let Some(status) =
             self.auth_guard.connection_status(client_cert_present)
         {
-            return Box::pin(
-                async move { Ok(status_response(status, version)) },
-            );
+            return DispatchCall::ready(ServiceResult::Handled(
+                status_response(status, version),
+            ));
         }
 
         let conn_ctx = conn_ctx
             .expect("verified client certificate requires connection context");
         // Prepared once, when the connection was accepted; every request of
         // the connection shares its decision.
-        let Some(session) =
-            conn_ctx.state.get::<Arc<super::access::Session>>().cloned()
+        let Some(session) = context
+            .and_then(|context| {
+                context.conn_state().get::<Arc<super::access::Session>>()
+            })
+            .cloned()
         else {
-            return Box::pin(async move {
-                Ok(status_response(
+            return DispatchCall::ready(ServiceResult::Handled(
+                status_response(
                     Status::internal(
                         "no management session was prepared when this connection was accepted",
                     ),
                     version,
-                ))
-            });
+                ),
+            ));
         };
         let transport = ManagementTransport(conn_ctx.listener.clone());
-        if let Some(conn_info) = conn_info {
-            req.extensions_mut().insert(conn_info);
-        }
+        req.extensions_mut().insert(Arc::new(conn_info_from_ctx(conn_ctx)));
         req.extensions_mut().insert(transport);
 
         let routes = self.routes.clone();
         let operation = req.uri().path().to_owned();
-        let head_timeout = req
-            .extensions()
-            .get::<HttpPolicy>()
+        let head_timeout = context
+            .and_then(|context| context.policy())
             .and_then(|policy| policy.requests.head_timeout);
         let mut req = req.map(|body| {
             let body = body.map_err(|err| Status::internal(err.to_string()));
             tonic::body::Body::new(body)
         });
 
-        Box::pin(async move {
+        DispatchCall::response(Box::pin(async move {
             let serve = async {
                 let admitted = session.admit(operation).await?;
                 req.extensions_mut().insert(admitted);
@@ -119,17 +126,34 @@ impl OtherHandler for ManagementGrpcHandler {
                     version,
                 )),
             }
-        })
+        }))
+    }
+}
+
+impl RouteLayer for ManagementGrpcHandler {
+    fn prepare(
+        &self,
+        layer: &mut HostLayerBuilder,
+    ) -> claviron::pipeline::Result<()> {
+        Backend::new(self.clone(), HttpPolicy::unlimited()).prepare(layer)
+    }
+
+    fn prepare_scoped(
+        &self,
+        layer: &mut HostLayerBuilder,
+        scope: &PreparedScope<'_>,
+    ) -> claviron::pipeline::Result<()> {
+        Backend::new(self.clone(), scope.policy).prepare(layer)
     }
 }
 
 /// The peer whose client certificate the handshake verified.
 fn verified_peer(
     connection: &ConnCtx
-) -> Option<Arc<claviron::ssl::peer::PeerIdentity>> {
+) -> Option<&Arc<claviron::ssl::peer::PeerIdentity>> {
     let tls = connection.tls.as_ref()?;
     matches!(tls.client_auth, ClientAuthStatus::Verified)
-        .then(|| tls.client_cert.clone())
+        .then_some(tls.client_cert.as_ref())
         .flatten()
 }
 
@@ -145,7 +169,7 @@ pub(crate) fn prepare_connection(
     if let Some(peer) = verified_peer(connection) {
         conn.insert(Arc::new(super::access::Session::new(
             state.clone(),
-            Some(peer),
+            Some(peer.clone()),
         )));
     }
 }
@@ -201,5 +225,5 @@ fn conn_info_from_ctx(ctx: &ConnCtx) -> ConnInfo {
 }
 
 #[cfg(test)]
-#[path = "../../tests/server/bypass_protocol.rs"]
+#[path = "../../tests/server/backend.rs"]
 mod protocol_tests;

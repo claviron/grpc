@@ -26,7 +26,6 @@ use tonic::Code;
 
 use super::mtls::{ManagedSigner, MtlsManager};
 use crate::access::AccessError;
-use crate::server::config::GrpcConfig;
 use crate::server::provider::GrpcServiceProvider;
 
 pub const PATH: &str = "/.well-known/claviron/grpc-registration";
@@ -182,7 +181,7 @@ impl Routable for RegistrationRoutes {
         Ok(Some(Arc::new(RegistrationHandler {
             state: state.clone(),
             guard,
-            config,
+            management_hosts: config.vhosts().to_vec().into(),
             validity_days,
         })))
     }
@@ -191,7 +190,7 @@ impl Routable for RegistrationRoutes {
 struct RegistrationHandler {
     state: AppState,
     guard: Arc<dyn RegistrationGuard>,
-    config: Arc<GrpcConfig>,
+    management_hosts: Arc<[Host]>,
     validity_days: NonZeroU32,
 }
 
@@ -207,7 +206,7 @@ impl HostHandler for RegistrationHandler {
         }
         let state = self.state.clone();
         let guard = self.guard.clone();
-        let config = self.config.clone();
+        let management_hosts = self.management_hosts.clone();
         let validity_days = self.validity_days;
         let timeout = request
             .head()
@@ -222,7 +221,7 @@ impl HostHandler for RegistrationHandler {
                     &state,
                     guard.as_ref(),
                     validity_days,
-                    config.vhosts(),
+                    &management_hosts,
                 ),
             )
             .await

@@ -1,6 +1,6 @@
 [package]
 name = "claviron-grpc"
-version = "0.2.0-alpha.25"
+version = "0.2.0-alpha.25.1"
 publish = true
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/claviron/grpc"
