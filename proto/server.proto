@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package claviron.server;
+
+option php_namespace = "Claviron\\Proto\\Server";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+// Whole-server reload waits for the terminal ServerReloaded event. Shutdown is
+// accepted once its Unix signal reaches the process-family control process.
+service ServerManager {
+  rpc GetInfo(InfoRequest) returns (InfoResponse);
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message InfoRequest {}
+
+enum RunMode {
+  RUN_MODE_UNSPECIFIED = 0;
+  RUN_MODE_MASTER = 1;
+  RUN_MODE_WORKER = 2;
+  RUN_MODE_STANDALONE = 3;
+}
+
+// One read-only observation, not a readiness or convergence acknowledgement.
+message InfoResponse {
+  string name = 1;
+  string environment = 2;
+  optional string fleet_name = 3;
+  string hostname = 4;
+  string claviron_version = 5;
+  optional string application_version = 6;
+  // Exact master identity when observed; standalone uses its runtime identity.
+  optional string instance_id = 7;
+  optional uint32 workers_desired = 8;
+  optional uint32 workers_running = 9;
+  google.protobuf.Timestamp workers_captured_at = 10;
+  // UTC Unix start. Worker responses use the authoritative master observation;
+  // absent only when that observation is unavailable.
+  google.protobuf.Timestamp started_at = 11;
+  // Monotonic runtime age. Worker responses report the master's observed age
+  // at workers_captured_at, never the responding worker's age.
+  google.protobuf.Duration uptime = 12;
+  optional uint64 reload_revision = 13;
+  ProcessInfo responding_process = 14;
+  // Installed management surfaces, not guessed language/runtime support.
+  repeated string capabilities = 15;
+  google.protobuf.Timestamp captured_at = 16;
+}
+
+message ProcessInfo {
+  RunMode run_mode = 1;
+  uint32 pid = 2;
+  optional uint32 worker_id = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Duration uptime = 5;
+  uint64 reload_revision = 6;
+}
+
+message ReloadRequest {}
+message ReloadResponse {
+  uint64 revision = 1;
+}
+message ShutdownRequest {}
+message ShutdownResponse {}

@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package claviron.applications;
+
+import "google/protobuf/timestamp.proto";
+
+service ApplicationManager {
+  rpc ListApplications(ListApplicationsRequest) returns (ListApplicationsResponse);
+  rpc GetApplicationStatus(ApplicationStatusRequest) returns (ApplicationStatusResponse);
+  rpc StartApplication(ApplicationCommandRequest) returns (ApplicationCommandResponse);
+  rpc StopApplication(ApplicationCommandRequest) returns (ApplicationCommandResponse);
+  rpc RestartApplication(ApplicationCommandRequest) returns (ApplicationCommandResponse);
+}
+
+message ApplicationId {
+  string runtime = 1;
+  string name = 2;
+}
+
+message ListApplicationsRequest {}
+
+message ListApplicationsResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  uint32 members_expected = 2;
+  uint32 members_reporting = 3;
+  repeated ApplicationStatus applications = 4;
+}
+
+message ApplicationStatusRequest { ApplicationId id = 1; }
+
+message ApplicationStatusResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  uint32 members_expected = 2;
+  uint32 members_reporting = 3;
+  ApplicationStatus application = 4;
+}
+
+message ApplicationStatus {
+  ApplicationId id = 1;
+  repeated ApplicationPlacement placements = 2;
+}
+
+message ApplicationPlacement {
+  FleetMember member = 1;
+  ApplicationLifecycle lifecycle = 2;
+  bool enabled = 3;
+  uint64 generation = 4;
+  optional ApplicationPoolStatus pool = 5;
+  optional string last_error = 6;
+  bool last_error_truncated = 7;
+  google.protobuf.Timestamp observed_at = 8;
+  // Execution owner facts, independent of the control identity and transport.
+  ApplicationDescription description = 9;
+}
+
+message ApplicationDescription {
+  optional string runtime = 1;
+  repeated string frameworks = 2;
+  optional string runner = 3;
+  optional string request_mode = 4;
+  // Symbolic client icon code, never a path or URL. Unknown codes use a default.
+  optional string icon = 5;
+}
+
+message ApplicationPoolStatus {
+  optional bool accepting = 1;
+  uint32 instances = 2;
+  optional uint32 ready = 3;
+  optional uint32 busy = 4;
+  optional uint32 retiring = 5;
+  optional uint32 backing_off = 6;
+  optional uint32 exhausted = 7;
+}
+
+message FleetMember {
+  uint32 node_id = 1;
+  FleetMemberRole role = 2;
+}
+
+message ApplicationCommandRequest { ApplicationId id = 1; }
+
+message ApplicationCommandResponse {
+  ApplicationId id = 1;
+  bool accepted = 2;
+}
+
+enum ApplicationLifecycle {
+  APPLICATION_LIFECYCLE_UNSPECIFIED = 0;
+  APPLICATION_LIFECYCLE_STARTING = 1;
+  APPLICATION_LIFECYCLE_RUNNING = 2;
+  APPLICATION_LIFECYCLE_STOPPING = 3;
+  APPLICATION_LIFECYCLE_STOPPED = 4;
+  APPLICATION_LIFECYCLE_FAILED = 5;
+}
+
+enum FleetMemberRole {
+  FLEET_MEMBER_ROLE_UNSPECIFIED = 0;
+  FLEET_MEMBER_ROLE_MASTER = 1;
+  FLEET_MEMBER_ROLE_WORKER = 2;
+  FLEET_MEMBER_ROLE_STANDALONE = 3;
+}

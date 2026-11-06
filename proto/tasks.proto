@@ -1,0 +1,203 @@
+syntax = "proto3";
+
+package claviron.tasks;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option php_namespace = "Claviron\\Proto\\Tasks";
+
+// Task management for tasks configured in tasks.yaml. Lifecycle commands are
+// fleet-scoped; RunTask executes locally in the runtime receiving the RPC.
+service TaskManager {
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc GetTaskStatus(TaskStatusRequest) returns (TaskStatusResponse);
+  rpc StartTask(TaskCommandRequest) returns (TaskCommandResponse);
+  rpc StopTask(TaskCommandRequest) returns (TaskCommandResponse);
+  rpc ReloadTask(TaskCommandRequest) returns (TaskCommandResponse);
+  rpc RestartTask(TaskCommandRequest) returns (TaskCommandResponse);
+  rpc RunTask(RunTaskRequest) returns (RunTaskResponse);
+}
+
+message ListTasksRequest {}
+
+message ListTasksResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  uint32 members_expected = 2;
+  uint32 members_reporting = 3;
+  repeated TaskStatus tasks = 4;
+}
+
+message TaskStatusRequest {
+  string name = 1;
+}
+
+message TaskStatusResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  uint32 members_expected = 2;
+  uint32 members_reporting = 3;
+  TaskStatus task = 4;
+}
+
+// One configured logical task and its observed fleet placements.
+message TaskStatus {
+  reserved 6;
+  string name = 1;
+  TaskKind kind = 2;
+  TaskScope scope = 3;
+  TaskDispatch dispatch = 4;
+  TaskTiming timing = 5;
+  uint32 concurrency = 7;
+  repeated TaskPlacementStatus placements = 8;
+}
+
+message TaskTiming {
+  oneof schedule {
+    DaemonTiming daemon = 1;
+    IntervalTiming interval = 2;
+    CronTiming cron = 3;
+    ManualTiming manual = 4;
+  }
+}
+
+message DaemonTiming {
+  bool enabled = 1;
+}
+message ManualTiming {
+  google.protobuf.Duration execution_timeout = 1;
+}
+message IntervalTiming {
+  google.protobuf.Duration every = 1;
+  google.protobuf.Duration execution_timeout = 2;
+  bool enabled = 3;
+}
+message CronTiming {
+  string expression = 1;
+  google.protobuf.Duration execution_timeout = 2;
+  bool enabled = 3;
+}
+
+// One fleet member's current observation of a logical task.
+message TaskPlacementStatus {
+  TaskMember member = 1;
+  TaskLifecycle lifecycle = 2;
+  uint64 in_flight = 3;
+  optional TaskExecutionOutcome last_execution = 4;
+  google.protobuf.Timestamp observed_at = 5;
+  // Process-local automatic supervisor/controller generation. Explicit runs
+  // do not change this value.
+  uint64 generation = 6;
+
+  // Fleet-arbitrated slots this member holds. Distinct from `in_flight`:
+  // owning a task and running it are different questions, and for a scheduled
+  // task they differ nearly all of the time -- a cron `one` task holds its slot
+  // for the whole period and executes for a fraction of it. Zero for `each`,
+  // which arbitrates nothing.
+  uint64 owned_slots = 7;
+}
+
+message TaskMember {
+  uint32 node_id = 1;
+  TaskMemberRole role = 2;
+}
+
+message TaskExecutionOutcome {
+  TaskExecutionResult result = 1;
+  google.protobuf.Timestamp finished_at = 2;
+}
+
+message TaskCommandRequest {
+  string name = 1;
+}
+
+message RunTaskRequest {
+  string name = 1;
+  // Overrides tasks.yaml for this occurrence only. Omission uses the timeout
+  // owned by the task's manual, interval, or cron timing policy.
+  optional google.protobuf.Duration execution_timeout = 2;
+}
+
+// Acceptance means that the command passed local validation and was
+// published. It does not acknowledge completion by every fleet member.
+message TaskCommandResponse {
+  string name = 1;
+  bool accepted = 2;
+}
+
+message RunTaskResponse {
+  string name = 1;
+  // Process-local correlation id for this execution.
+  uint64 run_id = 2;
+  oneof result {
+    RunTaskSuccess success = 3;
+    RunTaskFailure failure = 4;
+  }
+}
+
+message RunTaskSuccess {}
+
+message RunTaskFailure {
+  RunTaskFailureKind kind = 1;
+  string message = 2;
+}
+
+enum RunTaskFailureKind {
+  RUN_TASK_FAILURE_KIND_UNSPECIFIED = 0;
+  RUN_TASK_FAILURE_KIND_IO = 1;
+  RUN_TASK_FAILURE_KIND_CANCELLED = 2;
+  RUN_TASK_FAILURE_KIND_SHUTDOWN = 3;
+  RUN_TASK_FAILURE_KIND_GRACEFUL_TIMEOUT = 4;
+  RUN_TASK_FAILURE_KIND_EXECUTION_TIMEOUT = 5;
+  RUN_TASK_FAILURE_KIND_TASK = 6;
+}
+
+enum TaskKind {
+  TASK_KIND_UNSPECIFIED = 0;
+  TASK_KIND_BUILTIN = 1;
+  TASK_KIND_COMMAND = 2;
+  TASK_KIND_PHP = 3;
+  TASK_KIND_JS = 4;
+  TASK_KIND_LUA = 5;
+}
+
+enum TaskScope {
+  TASK_SCOPE_UNSPECIFIED = 0;
+  TASK_SCOPE_MASTER = 1;
+  TASK_SCOPE_WORKERS = 2;
+  TASK_SCOPE_FLEET = 3;
+}
+
+enum TaskDispatch {
+  TASK_DISPATCH_UNSPECIFIED = 0;
+  TASK_DISPATCH_EACH = 1;
+  TASK_DISPATCH_ONE = 2;
+  TASK_DISPATCH_POOL = 3;
+}
+
+enum TaskMemberRole {
+  TASK_MEMBER_ROLE_UNSPECIFIED = 0;
+  TASK_MEMBER_ROLE_MASTER = 1;
+  TASK_MEMBER_ROLE_WORKER = 2;
+  TASK_MEMBER_ROLE_STANDALONE = 3;
+}
+
+enum TaskLifecycle {
+  TASK_LIFECYCLE_UNSPECIFIED = 0;
+  TASK_LIFECYCLE_INELIGIBLE = 1;
+  TASK_LIFECYCLE_DISABLED = 2;
+  reserved 3;
+  TASK_LIFECYCLE_INACTIVE = 4;
+  TASK_LIFECYCLE_ACTIVE = 5;
+  TASK_LIFECYCLE_STOPPING = 6;
+  TASK_LIFECYCLE_FINISHED = 7;
+  TASK_LIFECYCLE_MISSING_RUNNER = 8;
+}
+
+enum TaskExecutionResult {
+  TASK_EXECUTION_RESULT_UNSPECIFIED = 0;
+  TASK_EXECUTION_RESULT_SUCCEEDED = 1;
+  TASK_EXECUTION_RESULT_FAILED = 2;
+  TASK_EXECUTION_RESULT_CANCELLED = 3;
+  TASK_EXECUTION_RESULT_TIMED_OUT = 4;
+  TASK_EXECUTION_RESULT_GAVE_UP = 5;
+}

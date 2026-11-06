@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package claviron.linked_applications;
+
+import "google/protobuf/timestamp.proto";
+import "applications.proto";
+
+// Management of independently started applications; Orbit Link is the current adapter.
+service LinkedApplicationManager {
+  rpc ListLinkedApplications(ListLinkedApplicationsRequest) returns (ListLinkedApplicationsResponse);
+  rpc GetLinkedApplicationStatus(LinkedApplicationStatusRequest) returns (LinkedApplicationStatusResponse);
+  // These forward application lifecycle requests to the runner. The edge
+  // does not start or stop the runner process.
+  rpc StartLinkedApplication(LinkedApplicationCommandRequest) returns (LinkedApplicationCommandResponse);
+  rpc StopLinkedApplication(LinkedApplicationCommandRequest) returns (LinkedApplicationCommandResponse);
+  rpc RestartLinkedApplication(LinkedApplicationCommandRequest) returns (LinkedApplicationCommandResponse);
+  rpc SendLinkedCommand(LinkedApplicationCommandRequest) returns (LinkedApplicationCommandResponse);
+}
+
+message LinkedApplicationId {
+  // Orbit Link destination; several hosted applications may share it.
+  string fleet_name = 1;
+  string name = 2;
+  // Empty retains the legacy Orbit address. Other methods need their own adapter.
+  string transport = 3;
+}
+
+message LinkedApplicationInfo {
+  LinkedApplicationId id = 1;
+  // Advertised Link runtime. Empty when a configured target has never joined.
+  string runtime = 2;
+}
+
+message ListLinkedApplicationsRequest {}
+
+message ListLinkedApplicationsResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  repeated LinkedApplicationStatus applications = 2;
+}
+
+message LinkedApplicationStatusRequest {
+  LinkedApplicationId id = 1;
+}
+
+message LinkedApplicationStatusResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  LinkedApplicationStatus application = 2;
+}
+
+message LinkedApplicationStatus {
+  LinkedApplicationInfo info = 1;
+  // Link connectivity is independent of the hosted application's lifecycle.
+  LinkReachability link = 2;
+  uint32 connected_lanes = 3;
+  repeated LinkedApplicationLane lanes = 4;
+  // The runner's application manager supplies this complete snapshot.
+  // Absent until a connected runner has reported its applications.
+  claviron.applications.ListApplicationsResponse hosted = 5;
+}
+
+message LinkedApplicationLane {
+  uint32 lane = 1;
+  optional uint32 pid = 2;
+  uint64 incarnation = 3;
+}
+
+message LinkedApplicationCommandRequest {
+  LinkedApplicationId id = 1;
+  // Application-defined command. The bridge does not execute it.
+  string command = 2;
+  bytes payload = 3;
+  // Required for Start/Stop/Restart; selects one application inside the runner.
+  claviron.applications.ApplicationId application = 4;
+}
+
+// Accepted means written to one live Link inbox, not executed by the runner.
+message LinkedApplicationCommandResponse {
+  LinkedApplicationId id = 1;
+  bool accepted = 2;
+  claviron.applications.ApplicationId application = 3;
+}
+
+enum LinkReachability {
+  LINK_REACHABILITY_UNSPECIFIED = 0;
+  LINK_REACHABILITY_CONNECTED = 1;
+  LINK_REACHABILITY_DISCONNECTED = 2;
+}

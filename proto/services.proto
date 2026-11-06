@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package claviron.services;
+
+import "google/protobuf/timestamp.proto";
+
+option php_namespace = "Claviron\\Proto\\Services";
+
+// Fleet control for process-bound Continuo Runnable services. Registration
+// determines placement; this protocol owns no second service configuration.
+service ServiceManager {
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  rpc GetServiceStatus(ServiceStatusRequest) returns (ServiceStatusResponse);
+  rpc StartService(ServiceCommandRequest) returns (ServiceCommandResponse);
+  rpc StopService(ServiceCommandRequest) returns (ServiceCommandResponse);
+  rpc ReloadService(ServiceCommandRequest) returns (ServiceCommandResponse);
+  rpc RestartService(ServiceCommandRequest) returns (ServiceCommandResponse);
+}
+
+message ListServicesRequest {}
+
+message ListServicesResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  uint32 members_expected = 2;
+  uint32 members_reporting = 3;
+  repeated ServiceStatus services = 4;
+}
+
+message ServiceStatusRequest {
+  string name = 1;
+}
+
+message ServiceStatusResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  uint32 members_expected = 2;
+  uint32 members_reporting = 3;
+  ServiceStatus service = 4;
+}
+
+// One runnable service and every process where that provider is registered.
+message ServiceStatus {
+  string name = 1;
+  repeated ServicePlacement placements = 2;
+}
+
+message ServicePlacement {
+  ServiceMember member = 1;
+  ServiceLifecycle lifecycle = 2;
+  bool reloadable = 3;
+  uint64 generation = 4;
+  uint64 reload_revision = 5;
+  optional string last_error = 6;
+  bool last_error_truncated = 7;
+  optional string last_reload_error = 8;
+  bool last_reload_error_truncated = 9;
+  google.protobuf.Timestamp observed_at = 10;
+  ServiceStartPolicy start_policy = 11;
+  // Controller lifecycle is independent of actual runnable executions. Absent
+  // on older servers; zero means this member runs no execution, not missing data.
+  optional uint64 active_executions = 12;
+  ServiceDispatch dispatch = 13;
+}
+
+message ServiceMember {
+  uint32 node_id = 1;
+  ServiceMemberRole role = 2;
+}
+
+message ServiceCommandRequest {
+  string name = 1;
+}
+
+// Acceptance means the command passed validation and was published to the
+// fleet. Completion is observed through ListServices.
+message ServiceCommandResponse {
+  string name = 1;
+  bool accepted = 2;
+}
+
+enum ServiceLifecycle {
+  SERVICE_LIFECYCLE_UNSPECIFIED = 0;
+  SERVICE_LIFECYCLE_RUNNING = 1;
+  SERVICE_LIFECYCLE_STOPPING = 2;
+  SERVICE_LIFECYCLE_STOPPED = 3;
+  SERVICE_LIFECYCLE_FAILED = 4;
+}
+
+enum ServiceDispatch {
+  SERVICE_DISPATCH_UNSPECIFIED = 0;
+  SERVICE_DISPATCH_EACH = 1;
+  SERVICE_DISPATCH_ONE = 2;
+  SERVICE_DISPATCH_POOL = 3;
+}
+
+enum ServiceStartPolicy {
+  SERVICE_START_POLICY_UNSPECIFIED = 0;
+  SERVICE_START_POLICY_AUTOMATIC = 1;
+  SERVICE_START_POLICY_MANUAL = 2;
+  SERVICE_START_POLICY_UNAVAILABLE = 3;
+}
+
+enum ServiceMemberRole {
+  SERVICE_MEMBER_ROLE_UNSPECIFIED = 0;
+  SERVICE_MEMBER_ROLE_MASTER = 1;
+  SERVICE_MEMBER_ROLE_WORKER = 2;
+  SERVICE_MEMBER_ROLE_STANDALONE = 3;
+}

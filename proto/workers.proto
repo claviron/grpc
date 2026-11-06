@@ -1,0 +1,316 @@
+syntax = "proto3";
+
+package claviron.workers;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option php_namespace = "Claviron\\Proto\\Workers";
+
+service WorkerManager {
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+  rpc GetWorkerStatus(WorkerStatusRequest) returns (WorkerStatusResponse);
+  rpc StartWorker(WorkerCommandRequest) returns (WorkerCommandResponse);
+  rpc StopWorker(WorkerCommandRequest) returns (WorkerCommandResponse);
+  rpc ReloadWorker(WorkerCommandRequest) returns (WorkerCommandResponse);
+  rpc RestartWorker(WorkerCommandRequest) returns (WorkerCommandResponse);
+  rpc ReloadWorkers(ReloadWorkersRequest) returns (ReloadWorkersResponse);
+  rpc RestartWorkers(RestartWorkersRequest) returns (RestartWorkersResponse);
+  rpc AddWorker(ResizeWorkersRequest) returns (ResizeWorkersResponse);
+  rpc RemoveWorker(ResizeWorkersRequest) returns (ResizeWorkersResponse);
+}
+
+message ListWorkersRequest {}
+
+message ListWorkersResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  uint32 workers_expected = 2;
+  repeated WorkerStatus workers = 3;
+  // The exact master process that published this view. Absent only before
+  // the master has established itself.
+  optional MasterIdentity master = 4;
+  FleetMode fleet_mode = 5;
+  BuildIdentity build = 6;
+}
+
+message WorkerStatusRequest {
+  uint32 worker_id = 1;
+}
+
+message WorkerStatusResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  uint32 workers_expected = 2;
+  WorkerStatus worker = 3;
+  optional MasterIdentity master = 4;
+  FleetMode fleet_mode = 5;
+  BuildIdentity build = 6;
+}
+
+// A PID together with the kernel start stamp of the process that holds it:
+// the exact process, safe against PID reuse. The stamp is raw and
+// platform-specific — compare it, never present it as a date.
+message ProcessIdentity {
+  uint32 pid = 1;
+  uint64 started_at = 2;
+}
+
+message MasterIdentity {
+  ProcessIdentity process = 1;
+  // Counts master boots on this fleet's shared memory. Orders masters of one
+  // instance where two process identities alone cannot say which is newer.
+  uint64 generation = 2;
+}
+
+// The source the publishing master was built from. `revision` is the short
+// git hash (eight hex digits), empty when the build had no repository;
+// `dirty` means tracked files carried uncommitted changes.
+message BuildIdentity {
+  string revision = 1;
+  bool dirty = 2;
+}
+
+message WorkerStatus {
+  uint32 worker_id = 1;
+  // Derived by the master from `phase` and `desired` with the one rule it
+  // applies itself; carried so every client shows the same label without
+  // re-implementing that rule.
+  WorkerLifecycle lifecycle = 2;
+  // 3 was `pid`; the exact process is `process` now.
+  reserved 3;
+  optional google.protobuf.Duration uptime = 4;
+  // Automatic crash-recovery attempts in the current recovery epoch.
+  uint32 recovery_attempts = 5;
+  uint64 reload_revision = 6;
+  uint64 incarnation = 7;
+  // How the publishing master owns the live process in this slot.
+  WorkerOwnership ownership = 8;
+  // The exact process in the slot when one is known: the handle the master
+  // owns or, for a slot it could not claim, the worker-written presence that
+  // occupies the lane. UNOWNED with a process reads "boot is blocked by this
+  // PID".
+  optional ProcessIdentity process = 9;
+  // What the master has observed of the process, and for how long.
+  WorkerPhase phase = 10;
+  google.protobuf.Duration phase_age = 11;
+  // What the master wants of the slot, and for how long.
+  WorkerDesiredState desired = 12;
+  google.protobuf.Duration desired_age = 13;
+  // The lifecycle operation acting on the slot, if one is.
+  optional WorkerOperation operation = 14;
+  // Since the last heartbeat the master accepted from this process; absent
+  // until its first beat.
+  optional google.protobuf.Duration heartbeat_age = 15;
+  // Why boot reconciliation refused the slot, while `phase` is
+  // RECONCILIATION_BLOCKED; UNSPECIFIED otherwise.
+  WorkerBlockReason block_reason = 16;
+}
+
+// What the master wants of a slot. One case is set; a drain carries the two
+// facts that only a drain has.
+message WorkerDesiredState {
+  oneof state {
+    WorkerEnsureRunning ensure_running = 1;
+    WorkerStopped stopped = 2;
+    WorkerDrain drain = 3;
+  }
+}
+
+message WorkerEnsureRunning {}
+message WorkerStopped {}
+message WorkerDrain {
+  WorkerDrainReason reason = 1;
+  WorkerExitDisposition after_exit = 2;
+}
+
+// The operation acting on a slot: by authority, the fleet shutdown outranks a
+// fleet-wide operation, which outranks the slot's own.
+message WorkerOperation {
+  // The master's number for the operation, unique within one master lifetime.
+  uint64 id = 1;
+  WorkerOperationKind kind = 2;
+  // Set only when `kind` is RESIZE.
+  uint32 resize_from = 3;
+  uint32 resize_to = 4;
+  WorkerOperationOrigin origin = 5;
+  google.protobuf.Duration age = 6;
+}
+
+// Who asked for the operation. Distinct from its kind: a rolling restart is
+// one whether the GUI, claviron-client or SIGUSR1 asked.
+message WorkerOperationOrigin {
+  oneof origin {
+    WorkerManagementOrigin management = 1;
+    WorkerSupervisorOrigin supervisor = 2;
+    WorkerSignalOrigin signal = 3;
+  }
+}
+
+// A management command.
+message WorkerManagementOrigin {
+  // The worker whose control plane relayed the command; absent when the
+  // master's own control plane took it.
+  optional uint32 via_worker = 1;
+  // The `submission_key` the submitter's response carried.
+  uint64 submission_key = 2;
+}
+
+// The supervisor's own monitor: rotation, heartbeat recovery, crash recovery.
+message WorkerSupervisorOrigin {}
+
+// A process signal to the master: SIGHUP config reload, SIGTERM/SIGINT shutdown.
+message WorkerSignalOrigin {}
+
+message WorkerCommandRequest {
+  uint32 worker_id = 1;
+}
+
+// Acceptance means the command passed local validation and was published to
+// the master; it is not the master's acknowledgement. Completion is observed
+// through ListWorkers.
+//
+// `submission_key` names this one submission — a repeated click is a new
+// submission with a new key. While the master runs the operation it opened for
+// the submission, the operation's management origin carries the same key, so a
+// poll that lands in that window can tie the two. A refused submission opens
+// nothing, and an operation that completes between two polls is never seen:
+// the key is a correlation aid, not an acknowledgement or an idempotency key.
+message WorkerCommandResponse {
+  uint32 worker_id = 1;
+  bool accepted = 2;
+  uint64 submission_key = 3;
+}
+
+message ReloadWorkersRequest {}
+
+// ReloadWorkers targets the workers that are running when the master applies
+// the command. Completion is observed through each worker's reload_revision.
+message ReloadWorkersResponse {
+  bool accepted = 1;
+  // See WorkerCommandResponse.
+  uint64 submission_key = 2;
+}
+
+message RestartWorkersRequest {}
+
+// RestartWorkers replaces every currently running worker one at a time.
+// Completion is observed through each target worker's incarnation.
+message RestartWorkersResponse {
+  bool accepted = 1;
+  // See WorkerCommandResponse.
+  uint64 submission_key = 2;
+}
+
+message ResizeWorkersRequest {}
+
+// A resize changes logical fleet size by one. Physical fleet capacity remains
+// immutable. Completion is observed through ListWorkers.
+message ResizeWorkersResponse {
+  bool accepted = 1;
+  uint32 previous_worker_count = 2;
+  uint32 target_worker_count = 3;
+  // See WorkerCommandResponse.
+  uint64 submission_key = 4;
+}
+
+enum WorkerLifecycle {
+  WORKER_LIFECYCLE_UNSPECIFIED = 0;
+  WORKER_LIFECYCLE_STARTING = 1;
+  WORKER_LIFECYCLE_RUNNING = 2;
+  WORKER_LIFECYCLE_RELOADING = 3;
+  WORKER_LIFECYCLE_STOPPING = 4;
+  WORKER_LIFECYCLE_STOPPED = 5;
+  WORKER_LIFECYCLE_EXITED = 6;
+  WORKER_LIFECYCLE_CRASHED = 7;
+  // The slot is in the plan but this master did not spawn it: its node lane is
+  // still being published to by a worker from an earlier master. Not a
+  // failure — the master retries and claims it once that lane goes quiet.
+  WORKER_LIFECYCLE_UNCLAIMED = 8;
+}
+
+enum WorkerOwnership {
+  WORKER_OWNERSHIP_UNSPECIFIED = 0;
+  WORKER_OWNERSHIP_UNOWNED = 1;
+  WORKER_OWNERSHIP_SPAWNED = 2;
+  WORKER_OWNERSHIP_ADOPTED = 3;
+}
+
+enum FleetMode {
+  FLEET_MODE_UNSPECIFIED = 0;
+  FLEET_MODE_RUNNING = 1;
+  // Shutdown has latched in the master: no operation is accepted, every live
+  // slot is draining, and expected exits are not crashes.
+  FLEET_MODE_SHUTTING_DOWN = 2;
+}
+
+// What the master has observed of a slot's process. Never desired state: a
+// draining worker is still RUNNING here until it is seen to exit.
+enum WorkerPhase {
+  WORKER_PHASE_UNSPECIFIED = 0;
+  // No process; the slot's lane is being watched before it is filled.
+  WORKER_PHASE_UNCLAIMED = 1;
+  // A live worker of a dead master has been asked to accept this one.
+  WORKER_PHASE_OWNERSHIP_PENDING = 2;
+  // Boot could not prove safe adoption or reclamation; see `block_reason`.
+  WORKER_PHASE_RECONCILIATION_BLOCKED = 3;
+  WORKER_PHASE_STARTING = 4;
+  WORKER_PHASE_RUNNING = 5;
+  WORKER_PHASE_RELOADING = 6;
+  // The worker's runtime acknowledged a drain request; it is still running.
+  WORKER_PHASE_DRAIN_ACKNOWLEDGED = 7;
+  // The worker reported its managed teardown finished; the process still
+  // exists until the kernel says otherwise.
+  WORKER_PHASE_TEARDOWN_COMPLETED = 8;
+  // Reaped, and the exit was the one asked for.
+  WORKER_PHASE_EXITED_PLANNED = 9;
+  // Reaped, and the process left on its own or had to be drained because it
+  // hung; the recovery budget applies.
+  WORKER_PHASE_EXITED_FAILED = 10;
+}
+
+enum WorkerDrainReason {
+  WORKER_DRAIN_REASON_UNSPECIFIED = 0;
+  WORKER_DRAIN_REASON_SHUTDOWN = 1;
+  WORKER_DRAIN_REASON_SCALE_DOWN = 2;
+  WORKER_DRAIN_REASON_ROTATION = 3;
+  WORKER_DRAIN_REASON_HEARTBEAT_TIMEOUT = 4;
+  WORKER_DRAIN_REASON_MANUAL_STOP = 5;
+  WORKER_DRAIN_REASON_ROLLING_RESTART = 6;
+}
+
+// What a slot becomes once the process it is draining has exited.
+enum WorkerExitDisposition {
+  WORKER_EXIT_DISPOSITION_UNSPECIFIED = 0;
+  WORKER_EXIT_DISPOSITION_STAY_STOPPED = 1;
+  WORKER_EXIT_DISPOSITION_REPLACE = 2;
+  WORKER_EXIT_DISPOSITION_REMOVE_SLOT = 3;
+  WORKER_EXIT_DISPOSITION_FINISH_FLEET_SHUTDOWN = 4;
+}
+
+enum WorkerOperationKind {
+  WORKER_OPERATION_KIND_UNSPECIFIED = 0;
+  WORKER_OPERATION_KIND_START = 1;
+  WORKER_OPERATION_KIND_STOP = 2;
+  WORKER_OPERATION_KIND_RESTART = 3;
+  WORKER_OPERATION_KIND_RELOAD = 4;
+  WORKER_OPERATION_KIND_ROTATION = 5;
+  WORKER_OPERATION_KIND_HEARTBEAT_RECOVERY = 6;
+  WORKER_OPERATION_KIND_CRASH_RECOVERY = 7;
+  WORKER_OPERATION_KIND_RELOAD_ALL = 8;
+  WORKER_OPERATION_KIND_RESTART_ALL = 9;
+  WORKER_OPERATION_KIND_RESIZE = 10;
+  WORKER_OPERATION_KIND_CONFIG_RELOAD = 11;
+  WORKER_OPERATION_KIND_FLEET_SHUTDOWN = 12;
+}
+
+// Why boot reconciliation refused a slot whose lane carried typed presence.
+enum WorkerBlockReason {
+  // Not blocked.
+  WORKER_BLOCK_REASON_UNSPECIFIED = 0;
+  WORKER_BLOCK_REASON_STALE_PRESENCE = 1;
+  WORKER_BLOCK_REASON_WORKER_NOT_RUNNING = 2;
+  WORKER_BLOCK_REASON_WORKER_BUSY = 3;
+  WORKER_BLOCK_REASON_UNKNOWN_MASTER = 4;
+  WORKER_BLOCK_REASON_MASTER_STILL_ALIVE = 5;
+  WORKER_BLOCK_REASON_MASTER_NOT_OLDER = 6;
+  WORKER_BLOCK_REASON_IDENTITY_CHANGED = 7;
+}

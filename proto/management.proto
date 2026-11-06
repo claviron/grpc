@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package claviron.management;
+
+// Declarative form metadata, not executable UI. Each JSON field is UTF-8,
+// contains one JSON object, and is parsed with explicit receiver-owned limits.
+// Raw JSON preserves integer precision; a Struct's double values would not.
+// For interoperable GUI values, encode large IDs/exact decimals as strings.
+message Form {
+  // JSON Schema 2020-12 with an explicit $schema declaration.
+  bytes data_schema_json = 1;
+  // Optional JSON Forms UI Schema layout. Receivers must
+  // support its vocabulary before rendering; never execute supplied code or
+  // resolve arbitrary remote $refs. No secrets in defaults or examples.
+  optional bytes ui_schema_json = 2;
+}
+
+// JSON Pointer into the submitted document; empty means the whole document.
+message FieldViolation {
+  string path = 1;
+  string code = 2;
+  // Safe display message, never SQL, credentials, or echoed secret input.
+  string message = 3;
+}
+
+// A rejected mutation: no data was committed. Return at least one violation.
+message ValidationFailure {
+  repeated FieldViolation violations = 1;
+}

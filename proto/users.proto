@@ -1,0 +1,187 @@
+syntax = "proto3";
+
+package claviron.users;
+
+import "google/protobuf/empty.proto";
+import "management.proto";
+
+// Optional handlers delegate to application-provided management capabilities. Operator
+// identity comes from trusted admission, never from these request messages.
+// Each call rechecks authorization and provider-owned management scope, including
+// direct references, mutations, and every related role/permission target.
+service UserManagement {
+  rpc GetSchema(GetSchemaRequest) returns (ManagementSchema);
+  rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
+  rpc GetRecord(GetRecordRequest) returns (ManagedRecord);
+  rpc CreateRecord(CreateRecordRequest) returns (RecordMutationResult);
+  rpc UpdateRecord(UpdateRecordRequest) returns (RecordMutationResult);
+  rpc DeleteRecord(DeleteRecordRequest) returns (google.protobuf.Empty);
+  rpc GetAssignmentSchema(GetAssignmentSchemaRequest) returns (AssignmentSchema);
+  rpc GetAssignments(GetAssignmentsRequest) returns (Assignments);
+  rpc ReplaceAssignments(ReplaceAssignmentsRequest) returns (AssignmentMutationResult);
+}
+
+enum Resource {
+  RESOURCE_UNSPECIFIED = 0;
+  RESOURCE_USER = 1;
+  RESOURCE_ROLE = 2;
+  RESOURCE_PERMISSION = 3;
+}
+
+enum Operation {
+  OPERATION_UNSPECIFIED = 0;
+  OPERATION_LIST = 1;
+  OPERATION_READ = 2;
+  OPERATION_CREATE = 3;
+  OPERATION_UPDATE = 4;
+  OPERATION_DELETE = 5;
+  OPERATION_READ_ASSIGNMENTS = 6;
+  OPERATION_REPLACE_ASSIGNMENTS = 7;
+}
+
+message RecordKey {
+  Resource resource = 1;
+  // Required nonempty opaque public reference, not a mandated UUID or DB key.
+  string reference = 2;
+}
+
+message ManagedRecord {
+  RecordKey key = 1;
+  // Required nonempty optimistic concurrency token, not a clock.
+  string revision = 2;
+  // An application-defined UTF-8 JSON object. Exclude stored secrets and fields
+  // outside the authorized projection; do not serialize a database row blindly.
+  bytes data_json = 3;
+}
+
+message GetSchemaRequest {
+  Resource resource = 1;
+}
+
+message ManagementSchema {
+  Resource resource = 1;
+  // Required nonempty version for this complete description. Cache per server,
+  // provider, and authenticated actor; never reuse one server's schema elsewhere.
+  string revision = 2;
+  // JSON Schema 2020-12 describing the exposed output projection.
+  bytes record_schema_json = 3;
+  // Absent when the operation has no editable form. UI hints are not authority.
+  claviron.management.Form create = 4;
+  claviron.management.Form update = 5;
+  repeated Operation operations = 6;
+}
+
+message ListRecordsRequest {
+  Resource resource = 1;
+  // Required positive size, bounded by host policy. Zero is invalid, not "all".
+  uint32 page_size = 2;
+  optional string cursor = 3;
+  // Application-defined search text, never SQL or a client-selected scope.
+  optional string query = 4;
+}
+
+message ListRecordsResponse {
+  repeated ManagedRecord records = 1;
+  // Opaque cursor bound to provider, actor, and query. Recheck scope on each page.
+  optional string next_cursor = 2;
+}
+
+message GetRecordRequest {
+  RecordKey key = 1;
+}
+
+message CreateRecordRequest {
+  Resource resource = 1;
+  string schema_revision = 2;
+  // Object matching the create form; the provider allocates the public reference.
+  bytes data_json = 3;
+}
+
+message UpdateRecordRequest {
+  RecordKey key = 1;
+  string revision = 2;
+  string schema_revision = 3;
+  // Sparse top-level replacements. Omitted fields remain unchanged. Objects and
+  // arrays replace the complete field; null is explicit and schema-dependent,
+  // not property deletion. This is neither recursive merge nor JSON Patch.
+  // The update form describes editable values: validate changed fields and the
+  // resulting candidate, without requiring unchanged fields to be resent.
+  bytes changes_json = 4;
+}
+
+message DeleteRecordRequest {
+  RecordKey key = 1;
+  string revision = 2;
+}
+
+message RecordMutationResult {
+  // Exactly one outcome is required; missing outcome is a protocol error.
+  oneof outcome {
+    ManagedRecord record = 1;
+    claviron.management.ValidationFailure validation = 2;
+  }
+}
+
+enum Relation {
+  RELATION_UNSPECIFIED = 0;
+  RELATION_USER_ROLES = 1;
+  RELATION_USER_PERMISSIONS = 2;
+  RELATION_ROLE_PERMISSIONS = 3;
+}
+
+// Relationship discovery is independent of user CRUD availability.
+message GetAssignmentSchemaRequest {
+  Relation relation = 1;
+}
+
+message AssignmentSchema {
+  Relation relation = 1;
+  string revision = 2;
+  repeated Operation operations = 3;
+}
+
+message AssignmentKey {
+  Relation relation = 1;
+  // Owner's public reference: user for USER_*, role for ROLE_PERMISSIONS.
+  string reference = 2;
+}
+
+message Assignments {
+  AssignmentKey key = 1;
+  string revision = 2;
+  // Complete exposed direct assignments, not effective/inherited permissions.
+  // USER_ROLES targets roles; *_PERMISSIONS targets permissions.
+  repeated string members = 3;
+}
+
+message GetAssignmentsRequest {
+  AssignmentKey key = 1;
+}
+
+message ReplaceAssignmentsRequest {
+  AssignmentKey key = 1;
+  string revision = 2;
+  // Unique nonempty references. Atomically replace the complete editable set;
+  // empty explicitly clears it. Reject partial/hidden sets, forbidden targets,
+  // and privilege escalation. A scoped user view does not authorize editing
+  // shared role definitions or other users through those roles.
+  repeated string members = 3;
+}
+
+message AssignmentMutationResult {
+  oneof outcome {
+    Assignments assignments = 1;
+    claviron.management.ValidationFailure validation = 2;
+  }
+}
+
+// All schemas and revisions are advisory until rechecked by the provider at
+// the mutation boundary. Unknown/unspecified enum values, missing required
+// messages, empty references/revisions, malformed/non-object JSON, and invalid
+// page sizes return INVALID_ARGUMENT. Hosts apply explicit input-size limits.
+//
+// Provider error mapping: Unsupported -> UNIMPLEMENTED; Forbidden ->
+// PERMISSION_DENIED; NotFound -> NOT_FOUND; Conflict -> ABORTED; SchemaChanged ->
+// FAILED_PRECONDITION; Unavailable -> UNAVAILABLE. Downstream field validation
+// returns the mutation result's validation branch with OK transport status;
+// it never signifies a committed mutation. No raw infrastructure error is sent.

@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package claviron.aliases;
+
+option php_namespace = "Claviron\\Proto\\Aliases";
+
+// Virtual Hosting Management Service
+service AliasManager {
+  // Alias operations
+  rpc AddAlias(AddAliasRequest) returns (AliasResponse);
+  rpc RemoveAlias(RemoveAliasRequest) returns (OperationResponse);
+  rpc ReplaceAlias(ReplaceAliasRequest) returns (OperationResponse);
+  rpc ListAliases(ListAliasesRequest) returns (ListAliasesResponse);
+  rpc ListHosting(ListHostingRequest) returns (ListHostingResponse);
+  rpc ReloadVhosts(ReloadRequest) returns (OperationResponse);
+
+  // Server-Vhost pivot operations
+  rpc AddVhostToServers(AddVhostToServersRequest) returns (OperationResponse);
+  rpc RemoveVhostFromServers(RemoveVhostFromServersRequest) returns (OperationResponse);
+  rpc ListVhostsByServer(ListVhostsByServerRequest) returns (ListVhostsResponse);
+  rpc ListServersByVhost(ListServersByVhostRequest) returns (ListServersResponse);
+}
+// Add alias request
+message AddAliasRequest {
+  string vhost_name = 1;  // Parent vhost name
+  string hostname = 2;    // Alias hostname
+}
+
+// Remove alias request
+message RemoveAliasRequest {
+  string hostname = 1;  // Alias hostname
+}
+
+// Remove alias request
+message ReplaceAliasRequest {
+  string hostname = 1;  // Alias hostname
+  string vhost_name = 2; // new vhost
+}
+
+// List aliases request
+message ListAliasesRequest {
+  optional string vhost_name = 1;  // Filter by vhost
+  optional bool enabled_only = 2;  // Legacy filter; runtime lists contain only loaded hosts
+}
+
+// Alias info
+message AliasInfo {
+  int32 id = 1; // Persistence ID on writes; zero in runtime lists
+  string hostname = 2;
+  // Alias rows currently have no independent enabled state. Omission means
+  // that no authoritative alias-level value was reported.
+  optional bool enabled = 5;
+  // Static aliases cannot be added over, moved or removed through management.
+  bool read_only = 6;
+  optional string read_only_reason = 7;
+}
+
+// Alias response
+message AliasResponse {
+  AliasInfo alias = 1;
+  string vhost_name = 2;  // Parent vhost name
+}
+
+// List aliases response
+message ListAliasesResponse {
+  repeated AliasResponse aliases = 1;
+}
+
+// This server's live resolver snapshot, including hosts without DB records.
+// Names identify entries; list IDs are zero and server links are not queried.
+message ListHostingRequest {
+  optional bool enabled_vhosts_only = 1; // Legacy filter; all listed hosts are loaded
+}
+
+message HostingVhostInfo {
+  VhostInfo vhost = 1;
+  repeated AliasInfo aliases = 2;
+  repeated ServerInfo servers = 3;
+}
+
+message ListHostingResponse {
+  repeated HostingVhostInfo vhosts = 1;
+}
+
+// Reload request
+message ReloadRequest {
+  // Empty - just trigger reload
+}
+
+// Generic operation response
+message OperationResponse {
+  bool success = 1;
+  optional string message = 2;
+}
+
+// Server-Vhost pivot messages
+message AddVhostToServersRequest {
+  string vhost_name = 1;
+  repeated string server_names = 2;  // Multiple servers
+}
+
+message RemoveVhostFromServersRequest {
+  string vhost_name = 1;
+  repeated string server_names = 2;
+}
+
+message ListVhostsByServerRequest {
+  string server_name = 1;
+}
+
+message ListServersByVhostRequest {
+  string vhost_name = 1;
+}
+
+message VhostInfo {
+  int32 id = 1; // Persistence ID in pivot queries; zero in runtime lists
+  string name = 2;
+  bool enabled = 3;
+  // Applies to the host definition, not to adding dynamic aliases beneath it.
+  bool read_only = 4;
+  optional string read_only_reason = 5;
+}
+
+message ServerInfo {
+  int32 id = 1;
+  string name = 2;
+  bool enabled = 3;
+}
+
+message ListVhostsResponse {
+  repeated VhostInfo vhosts = 1;
+}
+
+message ListServersResponse {
+  repeated ServerInfo servers = 1;
+}

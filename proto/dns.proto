@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package claviron.dns;
+
+option php_namespace = "Claviron\\Proto\\Dns";
+
+// Operator-only authoritative DNS management. Transport authentication is the
+// same as the other management services; this is not a public DNS query API.
+// Persistence and snapshot publication belong to the DNS provider/store, not
+// to protobuf handlers. No database backend or file path crosses this boundary.
+service DnsManager {
+  rpc ListZones(ListZonesRequest) returns (ListZonesResponse);
+  rpc GetZone(GetZoneRequest) returns (ZoneResponse);
+  rpc AddZone(AddZoneRequest) returns (ZoneResponse);
+  rpc UpdateZone(UpdateZoneRequest) returns (ZoneResponse);
+  rpc RemoveZone(RemoveZoneRequest) returns (MutationResponse);
+
+  rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
+  rpc AddRecord(AddRecordRequest) returns (RecordResponse);
+  rpc UpdateRecord(UpdateRecordRequest) returns (RecordResponse);
+  rpc RemoveRecord(RemoveRecordRequest) returns (MutationResponse);
+
+  // Publish persisted data into serving snapshots. A write response proves a
+  // database commit, not fleet-wide reload completion.
+  rpc ReloadDns(ReloadDnsRequest) returns (ReloadDnsResponse);
+}
+
+message SoaConfig {
+  string mname = 1;
+  string rname = 2;
+  uint32 refresh = 3;
+  uint32 retry = 4;
+  uint32 expire = 5;
+  uint32 minimum = 6;
+}
+
+message ZoneConfig {
+  string domain = 1;
+  SoaConfig soa = 2;
+  bool enabled = 3;
+}
+
+message ZoneInfo {
+  uint64 id = 1;
+  ZoneConfig config = 2;
+  // The store owns serial advancement with each zone/record mutation.
+  uint32 serial = 3;
+}
+
+message RecordConfig {
+  string name = 1;
+  string type = 2;
+  string value = 3;
+  uint32 ttl = 4;
+  // Presence matters: SRV weight zero is valid, not "missing".
+  optional uint32 priority = 5;
+  optional uint32 weight = 6;
+  optional uint32 port = 7;
+  bool enabled = 8;
+}
+
+message RecordInfo {
+  uint64 id = 1;
+  string zone = 2;
+  RecordConfig config = 3;
+}
+
+message ListZonesRequest { bool enabled_only = 1; }
+message ListZonesResponse { repeated ZoneInfo zones = 1; }
+message GetZoneRequest { string domain = 1; }
+message AddZoneRequest { ZoneConfig config = 1; }
+// Full configuration replacement, not a proto3-default partial patch.
+message UpdateZoneRequest {
+  uint64 id = 1;
+  ZoneConfig config = 2;
+}
+message RemoveZoneRequest {
+  uint64 id = 1;
+  // Refuse removal of a nonempty zone unless explicitly requested.
+  bool cascade = 2;
+}
+message ZoneResponse { ZoneInfo zone = 1; }
+
+message ListRecordsRequest {
+  string zone = 1;
+  bool enabled_only = 2;
+}
+message ListRecordsResponse { repeated RecordInfo records = 1; }
+message AddRecordRequest {
+  string zone = 1;
+  RecordConfig config = 2;
+}
+// Full configuration replacement within the record's existing zone.
+message UpdateRecordRequest {
+  uint64 id = 1;
+  RecordConfig config = 2;
+}
+message RemoveRecordRequest { uint64 id = 1; }
+message RecordResponse {
+  RecordInfo record = 1;
+  uint32 zone_serial = 2;
+}
+message MutationResponse {
+  string zone = 1;
+  // Present when the zone remains after the mutation.
+  optional uint32 zone_serial = 2;
+}
+
+message ReloadDnsRequest {}
+message ReloadDnsResponse {
+  // Acceptance only; does not claim that every fleet member has reloaded.
+  bool accepted = 1;
+}

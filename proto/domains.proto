@@ -1,0 +1,305 @@
+syntax = "proto3";
+
+package claviron.domains;
+
+import "google/protobuf/timestamp.proto";
+
+option php_namespace = "Claviron\\Proto\\Domains";
+
+// Operator-only registrar and registrar-hosted DNS management. A registrar is
+// addressed by the name it carries in `domains.yaml` (`godaddy`, `namecheap`,
+// ...), never by a proto enum, so adding one does not change this contract.
+// The store view (`ListDomains`, `GetDomain`) is what Claviron has recorded;
+// the registrar view (`GetDomainInfo`, nameservers, contacts, records) is a
+// live call to the registrar and may be refused when it is not configured.
+// Authoritative DNS Claviron serves itself is `claviron.dns`, not this service.
+service DomainManager {
+  // Registrars present in `domains.yaml`, with their configuration state.
+  rpc ListRegistrars(ListRegistrarsRequest) returns (ListRegistrarsResponse);
+
+  // Store view.
+  rpc ListDomains(ListDomainsRequest) returns (ListDomainsResponse);
+  rpc GetDomain(GetDomainRequest) returns (DomainResponse);
+  // Record a domain the registrar already holds, with the registrar's own
+  // dates, reference and status.
+  rpc AddDomain(AddDomainRequest) returns (DomainResponse);
+  // Re-read a stored domain from the registrar its row names and replace
+  // the row; the way a renewal made elsewhere reaches the store.
+  rpc RefreshDomain(RefreshDomainRequest) returns (DomainResponse);
+
+  // Registrar view.
+  rpc GetDomainInfo(GetDomainInfoRequest) returns (DomainInfoResponse);
+  rpc GetContacts(GetContactsRequest) returns (ContactsResponse);
+  rpc RegisterDomain(RegisterDomainRequest) returns (DomainResponse);
+  rpc RenewDomain(RenewDomainRequest) returns (DomainResponse);
+
+  // Delegation: the domain's nameserver set, and glue hosts under the domain.
+  rpc GetNameservers(GetNameserversRequest) returns (NameserversResponse);
+  rpc SetNameservers(SetNameserversRequest) returns (NameserversResponse);
+  // Delegate to the nameservers `hosting.nameservers` lists for Claviron.
+  rpc UseClavironNameservers(UseClavironNameserversRequest) returns (NameserversResponse);
+  rpc CreateGlueRecord(CreateGlueRecordRequest) returns (GlueRecordResponse);
+  rpc UpdateGlueRecord(UpdateGlueRecordRequest) returns (GlueRecordResponse);
+
+  // Registrar-hosted DNS records (the registrar's own zone for the domain).
+  rpc ListRegistrarRecords(ListRegistrarRecordsRequest) returns (RegistrarRecordsResponse);
+  rpc ReplaceRegistrarRecords(ReplaceRegistrarRecordsRequest) returns (RegistrarRecordsResponse);
+  rpc UpsertRegistrarRecords(UpsertRegistrarRecordsRequest) returns (RegistrarRecordsResponse);
+  rpc RemoveRegistrarRecord(RemoveRegistrarRecordRequest) returns (RegistrarRecordsResponse);
+
+  // Registration templates: the contacts, nameservers and records a new
+  // registration starts from. Stored as declared; nothing is inferred.
+  rpc ListTemplates(ListTemplatesRequest) returns (ListTemplatesResponse);
+  rpc PutTemplate(PutTemplateRequest) returns (TemplateResponse);
+  rpc RemoveTemplate(RemoveTemplateRequest) returns (RemoveTemplateResponse);
+
+  // On-demand runs of the scheduled synchronizations.
+  rpc SyncDomains(SyncDomainsRequest) returns (SyncResponse);
+  rpc SyncDnsRecords(SyncDnsRecordsRequest) returns (SyncResponse);
+}
+
+enum DomainStatus {
+  DOMAIN_STATUS_UNSPECIFIED = 0;
+  DOMAIN_STATUS_PENDING = 1;
+  DOMAIN_STATUS_ACTIVE = 2;
+  DOMAIN_STATUS_EXPIRED = 3;
+  DOMAIN_STATUS_SUSPENDED = 4;
+  DOMAIN_STATUS_TRANSFERRING = 5;
+  DOMAIN_STATUS_FAILED = 6;
+}
+
+message RegistrarInfo {
+  // The key in `domains.yaml`.
+  string name = 1;
+  // False when the section is absent or incomplete; calls are refused then.
+  bool configured = 2;
+  // Which registrar-side features this integration implements.
+  bool supports_registration = 3;
+  bool supports_dns = 4;
+  bool supports_glue = 5;
+}
+
+message ListRegistrarsRequest {}
+message ListRegistrarsResponse { repeated RegistrarInfo registrars = 1; }
+
+// One row of Claviron's domain store.
+message Domain {
+  uint64 id = 1;
+  string name = 2;
+  string registrar = 3;
+  // The registrar's own reference for the registration.
+  string registrar_ref = 4;
+  // Empty when no DNS provider has been inferred or assigned.
+  string dns_provider = 5;
+  DomainStatus status = 6;
+  google.protobuf.Timestamp registered_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  bool auto_renew = 9;
+  uint32 renew_before_days = 10;
+  bool whois_privacy = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message ListDomainsRequest {
+  // Empty selects every registrar.
+  string registrar = 1;
+  // UNSPECIFIED selects every status.
+  DomainStatus status = 2;
+  // Only domains whose expiry falls within this many days; zero means no limit.
+  uint32 expiring_within_days = 3;
+}
+message ListDomainsResponse { repeated Domain domains = 1; }
+message GetDomainRequest { string name = 1; }
+message AddDomainRequest {
+  string registrar = 1;
+  string name = 2;
+}
+message RefreshDomainRequest { string name = 1; }
+message DomainResponse { Domain domain = 1; }
+
+// The registrar's current record for a domain. Presence matters: a registrar
+// that does not report a field leaves it unset rather than defaulted.
+message DomainInfo {
+  string name = 1;
+  string registrar = 2;
+  string registrar_ref = 3;
+  optional google.protobuf.Timestamp registered_at = 4;
+  optional google.protobuf.Timestamp expires_at = 5;
+  optional bool auto_renew = 6;
+  optional bool whois_privacy = 7;
+  repeated string nameservers = 8;
+  // The registrar's own status word, not mapped onto DomainStatus.
+  string registrar_status = 9;
+}
+
+message GetDomainInfoRequest {
+  string registrar = 1;
+  string name = 2;
+}
+message DomainInfoResponse { DomainInfo info = 1; }
+
+message Contact {
+  string first_name = 1;
+  string last_name = 2;
+  string address1 = 3;
+  string address2 = 4;
+  string city = 5;
+  string state_province = 6;
+  string postal_code = 7;
+  string country = 8;
+  // +NNN.NNNNNNNNNN
+  string phone = 9;
+  string email = 10;
+}
+
+message Contacts {
+  Contact registrant = 1;
+  optional Contact admin = 2;
+  optional Contact tech = 3;
+  optional Contact billing = 4;
+}
+
+message GetContactsRequest {
+  string registrar = 1;
+  string name = 2;
+}
+message ContactsResponse { Contacts contacts = 1; }
+
+// Registration takes contacts and nameservers from a stored template.
+message RegisterDomainRequest {
+  string registrar = 1;
+  string name = 2;
+  string template = 3;
+  uint32 years = 4;
+}
+
+// Renewal goes to the registrar the store row names.
+message RenewDomainRequest {
+  string name = 1;
+  uint32 years = 2;
+}
+
+message GetNameserversRequest {
+  string registrar = 1;
+  string name = 2;
+}
+// Full replacement of the delegation set.
+message SetNameserversRequest {
+  string registrar = 1;
+  string name = 2;
+  repeated string nameservers = 3;
+}
+message UseClavironNameserversRequest {
+  string registrar = 1;
+  string name = 2;
+}
+message NameserversResponse {
+  string name = 1;
+  repeated string nameservers = 2;
+}
+
+// A glue host lives under the domain itself (ns1.example.com for example.com).
+message CreateGlueRecordRequest {
+  string registrar = 1;
+  string name = 2;
+  string host = 3;
+  string ip = 4;
+}
+message UpdateGlueRecordRequest {
+  string registrar = 1;
+  string name = 2;
+  string host = 3;
+  string ip = 4;
+  // Registrars that key the change by the previous address need it.
+  optional string old_ip = 5;
+}
+message GlueRecordResponse {
+  string host = 1;
+  string ip = 2;
+}
+
+// One record as the registrar's DNS holds it. `name` is relative to the
+// domain (`@` for the apex).
+message RegistrarRecord {
+  string type = 1;
+  string name = 2;
+  string value = 3;
+  uint32 ttl = 4;
+  // Presence matters: SRV weight zero is valid, not "missing".
+  optional uint32 priority = 5;
+  optional uint32 weight = 6;
+  optional uint32 port = 7;
+}
+
+message ListRegistrarRecordsRequest {
+  string registrar = 1;
+  string name = 2;
+  // Empty selects every type.
+  string type = 3;
+}
+// Full replacement: records absent from the request are removed.
+message ReplaceRegistrarRecordsRequest {
+  string registrar = 1;
+  string name = 2;
+  repeated RegistrarRecord records = 3;
+}
+// Records matching on type and name are replaced; others stay.
+message UpsertRegistrarRecordsRequest {
+  string registrar = 1;
+  string name = 2;
+  repeated RegistrarRecord records = 3;
+}
+message RemoveRegistrarRecordRequest {
+  string registrar = 1;
+  string name = 2;
+  string type = 3;
+  string record_name = 4;
+}
+// The registrar's record set after the call.
+message RegistrarRecordsResponse {
+  string name = 1;
+  repeated RegistrarRecord records = 2;
+}
+
+message SyncDomainsRequest {
+  // Empty runs every configured registrar.
+  string registrar = 1;
+}
+message SyncDnsRecordsRequest {
+  // One stored domain; empty syncs every unexpired domain whose DNS
+  // provider is a configured registrar.
+  string name = 1;
+}
+message SyncFailure {
+  string domain = 1;
+  string message = 2;
+}
+message SyncResponse {
+  uint32 found = 1;
+  uint32 skipped = 2;
+  repeated string created = 3;
+  repeated string updated = 4;
+  repeated SyncFailure failed = 5;
+}
+
+// Contacts and nameservers are edited here; any DNS record list a template
+// carries stays as stored and is not exposed by this message.
+message DomainTemplate {
+  uint64 id = 1;
+  string name = 2;
+  Contacts contacts = 3;
+  repeated string nameservers = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message ListTemplatesRequest {}
+message ListTemplatesResponse { repeated DomainTemplate templates = 1; }
+// Insert or full replacement under `name`.
+message PutTemplateRequest {
+  string name = 1;
+  Contacts contacts = 2;
+  repeated string nameservers = 3;
+}
+message TemplateResponse { DomainTemplate template = 1; }
+message RemoveTemplateRequest { string name = 1; }
+message RemoveTemplateResponse { bool removed = 1; }

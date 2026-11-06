@@ -1,0 +1,84 @@
+syntax = "proto3";
+package claviron.mtls;
+
+import "google/protobuf/timestamp.proto";
+
+// Local-CA issuance and stored-certificate revocation. Material stays in hosting
+// database only; clients extract it separately when needed.
+service MtlsManager {
+  rpc CreateRootCa(CreateRootCaRequest) returns (CertificateInfo);
+  rpc CreateCertificate(CreateCertificateRequest) returns (CertificateInfo);
+  rpc RenewCertificate(RenewCertificateRequest) returns (CertificateInfo);
+  // Revoke any stored certificate locally and set enabled=false, regardless of issuer.
+  // This does not request revocation from an external ACME authority.
+  // Repeated calls preserve the first revocation time. Existing sessions remain open.
+  rpc RevokeCertificate(RevokeCertificateRequest) returns (CertificateInfo);
+}
+
+message RevokeCertificateRequest {
+  string common_name = 1;
+}
+
+// Retain the stored key, encoded subject and every extension. Select the
+// original issuer automatically; no identity or usage overrides are allowed.
+message RenewCertificateRequest {
+  string common_name = 1;
+  uint32 validity_days = 2;
+}
+
+enum CertificateKind {
+  CERTIFICATE_KIND_UNSPECIFIED = 0;
+  CERTIFICATE_KIND_SERVER = 1;
+  CERTIFICATE_KIND_CLIENT = 2;
+  CERTIFICATE_KIND_CA = 3;
+}
+
+message CreateCertificateRequest {
+  // An identity in Claviron's Host form (DNS name, IP or bare name).
+  string common_name = 1;
+  repeated string aliases = 2;
+  // Required, positive; must fit within the configured CA's validity period.
+  uint32 validity_days = 3;
+  CertificateKind kind = 4;
+  // Required for kind=CA; maximum intermediate depth below the new CA.
+  optional uint32 ca_path_len = 5;
+  // Omission selects the configured authority; otherwise a local_ca issuer name.
+  optional string issuer = 6;
+  // Optional client-only application identity, encoded as a URI SAN.
+  // The issuer does not infer a user, namespace meaning, or permissions.
+  optional string subject_uri = 7;
+  // Client-only, validated through the existing authorization manager when bound,
+  // otherwise through the issuer's explicitly configured definitions.
+  // Omission preserves an unscoped credential; an empty message declares no permissions.
+  // Definition membership does not authorize the caller to delegate a permission.
+  CertificatePermissions permissions = 8;
+}
+
+message CertificatePermissions {
+  repeated string names = 1;
+}
+
+message CertificateInfo {
+  int32 id = 1;
+  string common_name = 2;
+  repeated string aliases = 3;
+  google.protobuf.Timestamp issued_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  bool enabled = 6;
+  CertificateKind kind = 7;
+  // Absent only for a self-signed root CA.
+  optional int32 issuer_id = 8;
+  // URI SAN identities read from the actual signed certificate.
+  repeated string subject_uris = 9;
+  google.protobuf.Timestamp revoked_at = 10;
+  // Read from the signed certificate, not inferred from users or DB permissions.
+  CertificatePermissions permissions = 11;
+  // Intentionally no certificate, private key, bundle or filesystem path.
+}
+
+message CreateRootCaRequest {
+  string common_name = 1;
+  uint32 validity_days = 2;
+  optional string organization = 3;
+  optional string country = 4;
+}

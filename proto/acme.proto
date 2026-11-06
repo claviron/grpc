@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+package claviron.acme;
+
+import "google/protobuf/timestamp.proto";
+
+option php_namespace = "Claviron\\Proto\\Acme";
+
+// SSL/TLS Certificate Management Service
+service AcmeManager {
+  // Certificate operations
+  rpc AddCertificate(AddCertificateRequest) returns (AddCertificateResponse);
+  rpc GetCertificate(GetCertificateRequest) returns (CertificateResponse);
+  rpc RenewCertificate(RenewCertificateRequest) returns (RenewCertificateResponse);
+  rpc ListCertificates(ListCertificatesRequest) returns (ListCertificatesResponse);
+  rpc ListCertificateInventory(ListCertificatesRequest) returns (ListCertificateInventoryResponse);
+  rpc RemoveCertificate(UpdateCertificateRequest) returns (OperationResponse);
+  rpc DisableCertificate(UpdateCertificateRequest) returns (OperationResponse);
+  rpc ActivateCertificate(UpdateCertificateRequest) returns (OperationResponse);
+  rpc ReloadResolver(ReloadRequest) returns (OperationResponse);
+
+
+  // Server-Certificate pivot operations
+  rpc AddCertificateToServers(AddCertificateToServersRequest) returns (OperationResponse);
+  rpc RemoveCertificateFromServers(RemoveCertificateFromServersRequest) returns (OperationResponse);
+  rpc ListCertificatesByServer(ListCertificatesByServerRequest) returns (ListCertificatesResponse);
+  rpc ListServersByCertificate(ListServersByCertificateRequest) returns (ListServersResponse);
+}
+
+
+// Add certificate request
+message AddCertificateRequest {
+  repeated string aliases = 1; // multiple alias names first will be cn
+}
+
+// Get certificate request
+message GetCertificateRequest {
+  string hostname = 1;  // Common Name or  Alias name
+}
+
+// List certificates request
+message ListCertificatesRequest {
+  optional bool active_only = 2;    // Only active certificates
+  optional int32 expiring_days = 3; // Expiring within N days
+}
+
+// Remove certificate request
+message UpdateCertificateRequest {
+  string cn = 1;  // Common Name
+}
+
+// Renew certificate request
+message RenewCertificateRequest {
+  string cn = 1;
+  optional int64  renew_before = 2;
+}
+
+// Certificate response
+message CertificateResponse {
+  int32 id = 1;
+  string cname = 2;
+  repeated string aliases = 3;
+  google.protobuf.Timestamp issued_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  bool enabled = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  // Public certificate chain. Populated by GetCertificate only; list methods
+  // leave it empty. Private-key material is never exposed over gRPC.
+  string fullchain_pem = 8;
+  // Persisted usage role, also present in inventory/list responses.
+  CertificateKind kind = 9;
+  // Revocation is permanent and independent of the enabled flag.
+  google.protobuf.Timestamp revoked_at = 10;
+}
+
+enum CertificateKind {
+  CERTIFICATE_KIND_UNSPECIFIED = 0;
+  CERTIFICATE_KIND_SERVER = 1;
+  CERTIFICATE_KIND_CLIENT = 2;
+  CERTIFICATE_KIND_CA = 3;
+}
+
+message AddCertificateResponse {
+  int32  id = 1;
+  string content = 2;
+  bool attached_existing = 3;
+}
+
+message RenewCertificateResponse {
+  string content = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+
+// List certificates response
+message ListCertificatesResponse {
+  repeated CertificateResponse certificates = 1;
+}
+
+// Complete persisted certificate inventory, including server attachments.
+message CertificateInventoryInfo {
+  CertificateResponse certificate = 1;
+  repeated ServerInfo servers = 2;
+}
+
+message ListCertificateInventoryResponse {
+  repeated CertificateInventoryInfo certificates = 1;
+}
+
+
+// Reload request
+message ReloadRequest {
+  // Empty - just trigger reload
+}
+
+// Generic operation response
+message OperationResponse {
+  bool success = 1;
+  optional string message = 2;
+}
+
+// Server-Certificate pivot messages
+message AddCertificateToServersRequest {
+  string cn = 1;
+  repeated string server_names = 2;  // Multiple servers
+}
+
+message RemoveCertificateFromServersRequest {
+  string cn = 1;
+  repeated string server_names = 2;
+}
+
+message ListCertificatesByServerRequest {
+  string server_name = 1;
+}
+
+message ListServersByCertificateRequest {
+  string cn = 1;
+}
+
+message ServerInfo {
+  int32 id = 1;
+  string name = 2;
+  bool enabled = 3;
+}
+
+message ListServersResponse {
+  repeated ServerInfo servers = 1;
+}

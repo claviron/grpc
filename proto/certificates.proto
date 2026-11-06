@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package claviron.certificates;
+
+import "google/protobuf/timestamp.proto";
+
+// Import local CA material (including roots); export any stored certificate.
+// Protected by the same management endpoint admission policy as other RPCs.
+// The server reads/writes the hosting DB; only the client deals with files.
+service CertificateTransfer {
+  rpc ImportCertificate(ImportCertificateRequest) returns (CertificateInfo);
+  rpc ExportCertificate(ExportCertificateRequest) returns (ExportCertificateResponse);
+}
+
+message ImportCertificateRequest {
+  // One or more standard PEM CERTIFICATE blocks. Chain order is not significant.
+  // The target is the unique certificate matching private_key_pem.
+  string certificate_chain_pem = 1;
+  // A separate, unencrypted PEM private key. Never logged or echoed on import.
+  string private_key_pem = 2;
+  // Optional registered local CA issuer name. Omission detects it by signature.
+  // A selected issuer must already exist and verify the target certificate.
+  // Self-signed root CA imports omit issuer and register a new local issuer.
+  // ACME imports are local hosting CLI operations, unavailable through this RPC.
+  optional string issuer = 3;
+}
+
+message ExportCertificateRequest {
+  // Exact stored canonical CN, not a hostname/alias lookup.
+  string common_name = 1;
+  // Defaults to false. The private key is returned only when explicitly requested.
+  bool include_private_key = 2;
+}
+
+message ExportCertificateResponse {
+  CertificateInfo certificate = 1;
+  // Standard padded Base64 PEM, ordered from the target through its issuer chain.
+  string certificate_chain_pem = 2;
+  // Standard PKCS#8 PEM. Absent unless include_private_key is true.
+  optional string private_key_pem = 3;
+}
+
+enum CertificateKind {
+  CERTIFICATE_KIND_UNSPECIFIED = 0;
+  CERTIFICATE_KIND_SERVER = 1;
+  CERTIFICATE_KIND_CLIENT = 2;
+  CERTIFICATE_KIND_CA = 3;
+}
+
+message CertificateInfo {
+  int32 id = 1;
+  string common_name = 2;
+  repeated string aliases = 3;
+  CertificateKind kind = 4;
+  // Registered issuer name; local CA issuers are initially named by their CN.
+  // ACME issuers use their account-backed issuer name. Absent for a root CA.
+  optional string issuer = 5;
+  google.protobuf.Timestamp issued_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  bool enabled = 8;
+}
+
+// Import derives CN, SAN, validity and kind from the key-matched certificate.
+// CA requires BasicConstraints CA=true and valid signing usage. For leaves,
+// serverAuth maps to SERVER (including dual-use); clientAuth-only maps to CLIENT.
+// Missing/unsupported EKU is rejected instead of guessing.
+//
+// Except for a self-signed root, import requires exactly one enabled local DB
+// issuer whose CA verifies the target signature. A supplied fullchain never
+// registers its CA automatically; a root import requires its matching private key.
+// Root imports omit issuer and do not change active trust or authority config.
+// An explicitly selected ACME issuer returns FAILED_PRECONDITION. Unknown issuer names return NOT_FOUND; chains without a
+// registered local signer are rejected. No account selection, account import,
+// Certbot execution or ACME order is performed by this RPC.
+//
+// Duplicate CN returns ALREADY_EXISTS; existing material is never overwritten.
+// Invalid PEM/key/chain/ambiguous relationships return INVALID_ARGUMENT.
+// Missing HostingService returns FAILED_PRECONDITION; missing export CN returns
+// NOT_FOUND. Import responses contain metadata only. Client and CA records are
+// never attached to a server; server imports attach the responding server.
