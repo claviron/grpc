@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
-use claviron::edge::pipeline::RouteProtocol;
 use claviron::edge::{Host, HostConfig, Routable};
 use claviron::pipeline::extension::RouteLayer;
+use claviron::pipeline::factory::RouteProtocol;
 use claviron::runtime::congif::{
     self, ConfigFile, ConfigObserver, Configurable,
 };
@@ -73,7 +73,7 @@ impl Register<AppState> for GrpcServiceProvider {
         claviron::edge::register_accept_layer(
             state,
             move |host, _, _| hosts.config().vhosts().contains(host),
-            move |accepted: &claviron::edge::Accepted<'_>,
+            move |accepted: &claviron::pipeline::accept::Accepted<'_>,
                   conn: &mut claviron::http::ext::ConnStateBuilder| {
                 super::backend::prepare_connection(
                     &accepting,

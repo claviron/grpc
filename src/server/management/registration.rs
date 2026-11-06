@@ -6,16 +6,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64ct::{Base64, Encoding};
 use claviron::auth::AnyAuthenticated;
-use claviron::edge::pipeline::{HostHandler, HostHandlerFuture, HostRequest};
-use claviron::edge::{
-    Host, HostConfig, Routable, RouteProtocol, VhostResolver,
-};
+use claviron::edge::{Host, HostConfig, Routable, VhostResolver};
 use claviron::http::deadline::head_within;
 use claviron::http::ext::ConnCtx;
 use claviron::http::policy::HttpPolicy;
 use claviron::http::{
     RouteBody, RouteResponse, ServiceResult, bytes_body, empty_body,
 };
+use claviron::pipeline::factory::RouteProtocol;
+use claviron::pipeline::{HostHandler, HostHandlerFuture, HostRequest};
 use claviron::runtime::registry::{Bootable, Component, priority};
 use claviron::runtime::{AppState, registry};
 use claviron::ssl::SubjectUri;
