@@ -341,9 +341,12 @@ async fn enroll(
     let client = request
         .extensions()
         .get::<Arc<ConnCtx>>()
-        .map(|connection| connection.real_ip.unwrap_or(connection.remote.ip()));
+        .map(|connection| connection.real_ip.unwrap_or(connection.remote.ip()))
+        .map_or_else(|| "an unknown client".to_owned(), |ip| ip.to_string());
     if request.headers().contains_key(header::ORIGIN) {
-        tracing::warn!(?client, "gRPC registration refused a browser request");
+        tracing::warn!(
+            "gRPC registration refused a browser request from {client}"
+        );
         return reply(StatusCode::FORBIDDEN, empty_body());
     }
     if request
@@ -381,25 +384,22 @@ async fn enroll(
         Ok(user) => user,
         Err(AccessError::Unauthenticated) => {
             tracing::warn!(
-                ?client,
-                username = ?input.username,
-                "gRPC registration did not accept the credentials"
+                "gRPC registration did not accept the credentials of {:?} from {client}",
+                input.username
             );
             return reply(StatusCode::UNAUTHORIZED, empty_body());
         }
         Err(AccessError::Forbidden) => {
             tracing::warn!(
-                ?client,
-                username = ?input.username,
-                "gRPC registration is forbidden for this account"
+                "gRPC registration is forbidden for {:?} from {client}",
+                input.username
             );
             return reply(StatusCode::FORBIDDEN, empty_body());
         }
         Err(AccessError::Unavailable) => {
             tracing::warn!(
-                ?client,
-                username = ?input.username,
-                "gRPC registration could not reach its access policy"
+                "gRPC registration could not reach its access policy for {:?} from {client}",
+                input.username
             );
             return reply(StatusCode::SERVICE_UNAVAILABLE, empty_body());
         }
@@ -418,9 +418,8 @@ async fn enroll(
     match result {
         Ok(issued) => {
             tracing::info!(
-                ?client,
-                username = ?input.username,
-                "gRPC registration issued a client certificate"
+                "gRPC registration issued a client certificate to {:?} at {client}",
+                input.username
             );
             let Ok(body) = serde_json::to_vec(&RegistrationResponse {
                 management_address,
@@ -440,9 +439,8 @@ async fn enroll(
             let status = match error.code() {
                 Code::AlreadyExists => {
                     tracing::warn!(
-                        ?client,
-                        username = ?input.username,
-                        "gRPC registration found an existing certificate"
+                        "gRPC registration found an existing certificate for {:?} from {client}",
+                        input.username
                     );
                     StatusCode::CONFLICT
                 }
