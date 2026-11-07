@@ -3,11 +3,11 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use crate::server::head_within;
 use async_trait::async_trait;
 use base64ct::{Base64, Encoding};
 use claviron::auth::AnyAuthenticated;
 use claviron::edge::{Host, HostConfig, Routable, VhostResolver};
-use claviron::http::deadline::head_within;
 use claviron::http::ext::ConnCtx;
 use claviron::http::policy::HttpPolicy;
 use claviron::http::{
@@ -212,7 +212,7 @@ impl HostHandler for RegistrationHandler {
             .head()
             .extensions
             .get::<HttpPolicy>()
-            .and_then(|policy| policy.requests.head_timeout);
+            .and_then(|policy| policy.responses.idle_timeout);
         Box::pin(async move {
             let response = head_within(
                 timeout,

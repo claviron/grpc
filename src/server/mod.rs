@@ -26,3 +26,15 @@ pub(crate) mod mtls;
 
 #[cfg(feature = "certificates")]
 pub(crate) mod certificates;
+
+/// A reply that stalls before its head is a gap in that reply, bounded by the
+/// same `responses.idle_timeout` as the gaps after it. Without one it waits.
+pub(crate) async fn head_within<F: std::future::Future>(
+    limit: Option<std::time::Duration>,
+    head: F,
+) -> Option<F::Output> {
+    match limit {
+        Some(limit) => tokio::time::timeout(limit, head).await.ok(),
+        None => Some(head.await),
+    }
+}

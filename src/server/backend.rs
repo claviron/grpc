@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use claviron::http::deadline::head_within;
+use crate::server::head_within;
 use claviron::http::ext::{ClientAuthStatus, ConnCtx, ConnStateBuilder};
 use claviron::http::policy::HttpPolicy;
 use claviron::http::{RouteBody, RouteResponse, ServiceResult, boxed_body};
@@ -100,9 +100,9 @@ impl DispatchStep for ManagementGrpcHandler {
 
         let routes = self.routes.clone();
         let operation = req.uri().path().to_owned();
-        let head_timeout = context
+        let idle_timeout = context
             .and_then(|context| context.policy())
-            .and_then(|policy| policy.requests.head_timeout);
+            .and_then(|policy| policy.responses.idle_timeout);
         let mut req = req.map(|body| {
             let body = body.map_err(|err| Status::internal(err.to_string()));
             tonic::body::Body::new(body)
@@ -118,7 +118,7 @@ impl DispatchStep for ManagementGrpcHandler {
                     .unwrap_or_else(|err| match err {});
                 Ok::<_, Status>(response)
             };
-            match head_within(head_timeout, serve).await {
+            match head_within(idle_timeout, serve).await {
                 Some(Ok(resp)) => Ok(route_response(resp, version)),
                 Some(Err(status)) => Ok(status_response(status, version)),
                 None => Ok(status_response(

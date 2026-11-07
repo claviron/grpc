@@ -264,7 +264,7 @@ async fn grpc_response_head_uses_the_effective_http_deadline() {
         .unwrap();
     let request = accepted(&state, unaccepted(http::Version::HTTP_2, true));
     let mut policy = HttpPolicy::unlimited();
-    policy.requests.head_timeout = Some(std::time::Duration::ZERO);
+    policy.responses.idle_timeout = Some(std::time::Duration::ZERO);
     let response = handler_with_policy(policy).call(request).await.unwrap();
     assert_eq!(response.headers()["grpc-status"], "4");
 }

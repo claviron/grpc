@@ -191,9 +191,9 @@ with `tls.client_auth.mode: required`. Public hostnames belong to that host's
 aliases. The management binding is exclusive, not merged into an application
 router. Plaintext, unverified clients and HTTP/1 requests cannot enter RPC handling.
 Set listener selection in the vhost and listener settings in `http.yaml`.
-Use the vhost's `requests.head_timeout` to bound the time to the response head,
-including access policy and RPC execution. Edge's request-body and response-body
-policies apply separately. H3 requires Claviron's `http3` feature and a client
+The vhost's `responses.idle_timeout` bounds the time to the response head as it
+bounds every other gap in the reply, including access policy and RPC execution
+(`DEADLINE_EXCEEDED` on expiry). Edge's request-body policy applies separately. H3 requires Claviron's `http3` feature and a client
 that supports gRPC over H3.
 
 ## Client enrollment
