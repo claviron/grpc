@@ -121,6 +121,7 @@ fn unaccepted(
         .header("content-type", "application/grpc").header("te", "trailers")
         .body(claviron::http::bytes_body(frame.into())).unwrap();
     let connection = Arc::new(ConnCtx {
+        transport: claviron::http::listener::ListenerTransport::Tcp,
         state: Default::default(),
         listener: "management".parse().unwrap(),
         proto: Some(proto),

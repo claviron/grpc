@@ -881,6 +881,7 @@ async fn management_gateway_supplies_the_policy_bound_actor_once() {
         .body(claviron::http::bytes_body(frame.into()))
         .unwrap();
     let mut connection = ConnCtx {
+        transport: claviron::http::listener::ListenerTransport::Tcp,
         state: Default::default(),
         listener: "management".parse().unwrap(),
         proto: Some(claviron::tls::Proto::H2),
