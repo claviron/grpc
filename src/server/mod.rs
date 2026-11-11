@@ -11,7 +11,6 @@ pub(crate) mod dns;
 #[cfg(feature = "domains")]
 pub(crate) mod domains;
 pub mod greeter;
-pub(crate) mod linked;
 pub mod management;
 pub mod provider;
 pub mod service;

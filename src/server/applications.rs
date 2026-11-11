@@ -1,5 +1,7 @@
 //! Runtime-neutral application fleet management.
 
+mod link;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use claviron::app::fleet::{
@@ -18,6 +20,8 @@ use claviron::runtime::AppState;
 use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 
+use link::link_status;
+
 use crate::proto::applications::application_manager_server::{
     ApplicationManager, ApplicationManagerServer,
 };
@@ -26,12 +30,17 @@ use crate::proto::applications::{
     ApplicationDescription, ApplicationId, ApplicationLifecycle,
     ApplicationPlacement, ApplicationPoolStatus, ApplicationStatus,
     ApplicationStatusRequest, ApplicationStatusResponse, FleetMember,
-    FleetMemberRole, ListApplicationsRequest, ListApplicationsResponse,
+    FleetMemberRole, LinkApplicationCommandRequest,
+    LinkApplicationCommandResponse, LinkApplicationStatusRequest,
+    LinkApplicationStatusResponse, ListApplicationsRequest,
+    ListApplicationsResponse, ListLinkApplicationsRequest,
+    ListLinkApplicationsResponse,
 };
 
 #[derive(Clone)]
 pub struct ApplicationManagerService {
     manager: FleetApplicationManager,
+    state: AppState,
 }
 
 #[tonic::async_trait]
@@ -88,6 +97,71 @@ impl ApplicationManager for ApplicationManagerService {
     ) -> Result<Response<ApplicationCommandResponse>, Status> {
         self.command(request.into_inner().id, |manager, id| manager.restart(id))
     }
+
+    async fn list_link_applications(
+        &self,
+        _request: Request<ListLinkApplicationsRequest>,
+    ) -> Result<Response<ListLinkApplicationsResponse>, Status> {
+        let applications =
+            self.link_service()?.linked_applications().map_err(link_status)?;
+        Ok(Response::new(ListLinkApplicationsResponse {
+            captured_at: Some(link::timestamp(SystemTime::now())?),
+            applications: applications
+                .into_iter()
+                .map(link::proto_status)
+                .collect::<Result<_, _>>()?,
+        }))
+    }
+
+    async fn get_link_application_status(
+        &self,
+        request: Request<LinkApplicationStatusRequest>,
+    ) -> Result<Response<LinkApplicationStatusResponse>, Status> {
+        let (fleet, name) = link::domain_id(request.into_inner().id)?;
+        let application = self
+            .link_service()?
+            .linked_applications()
+            .map_err(link_status)?
+            .into_iter()
+            .find(|entry| entry.fleet == fleet && entry.name == name)
+            .ok_or_else(|| {
+                Status::not_found("Link application is not known to this edge")
+            })?;
+        Ok(Response::new(LinkApplicationStatusResponse {
+            captured_at: Some(link::timestamp(SystemTime::now())?),
+            application: Some(link::proto_status(application)?),
+        }))
+    }
+
+    async fn start_link_application(
+        &self,
+        request: Request<LinkApplicationCommandRequest>,
+    ) -> Result<Response<LinkApplicationCommandResponse>, Status> {
+        self.link_command(request.into_inner(), "start", true)
+    }
+
+    async fn stop_link_application(
+        &self,
+        request: Request<LinkApplicationCommandRequest>,
+    ) -> Result<Response<LinkApplicationCommandResponse>, Status> {
+        self.link_command(request.into_inner(), "stop", true)
+    }
+
+    async fn restart_link_application(
+        &self,
+        request: Request<LinkApplicationCommandRequest>,
+    ) -> Result<Response<LinkApplicationCommandResponse>, Status> {
+        self.link_command(request.into_inner(), "restart", true)
+    }
+
+    async fn send_link_command(
+        &self,
+        request: Request<LinkApplicationCommandRequest>,
+    ) -> Result<Response<LinkApplicationCommandResponse>, Status> {
+        let request = request.into_inner();
+        let command = request.command.clone();
+        self.link_command(request, &command, false)
+    }
 }
 
 impl ApplicationManagerService {
@@ -113,7 +187,10 @@ pub fn create_application_manager(
 ) -> Result<ApplicationManagerServer<ApplicationManagerService>, Status> {
     let manager =
         FleetApplicationManager::new(&state).map_err(manager_status)?;
-    Ok(ApplicationManagerServer::new(ApplicationManagerService { manager }))
+    Ok(ApplicationManagerServer::new(ApplicationManagerService {
+        manager,
+        state,
+    }))
 }
 
 fn application_id(

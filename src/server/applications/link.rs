@@ -12,32 +12,23 @@ use claviron::app::{ApplicationName, ApplicationRuntime};
 use claviron::edge::VhostResolver;
 use claviron::orbit::link::application::{
     ApplicationService, ControlTarget, Error as LinkError,
-    LinkedApplication as LinkApplication,
+    LinkedApplication as DomainLinkApplication,
 };
-use claviron::runtime::{AppState, FleetName};
+use claviron::runtime::FleetName;
 use prost_types::Timestamp;
-use tonic::{Request, Response, Status};
+use tonic::{Response, Status};
 
-use super::applications::application_status;
-use crate::proto::applications::ListApplicationsResponse;
-use crate::proto::linked_applications::linked_application_manager_server::{
-    LinkedApplicationManager, LinkedApplicationManagerServer,
-};
-use crate::proto::linked_applications::{
-    LinkReachability, LinkedApplicationCommandRequest,
-    LinkedApplicationCommandResponse, LinkedApplicationId,
-    LinkedApplicationInfo, LinkedApplicationLane, LinkedApplicationStatus,
-    LinkedApplicationStatusRequest, LinkedApplicationStatusResponse,
-    ListLinkedApplicationsRequest, ListLinkedApplicationsResponse,
+use super::{ApplicationManagerService, application_status};
+use crate::proto::applications::{
+    LinkApplicationCommandRequest, LinkApplicationCommandResponse,
+    LinkApplicationId, LinkApplicationInfo, LinkApplicationLane,
+    LinkApplicationStatus, LinkReachability, ListApplicationsResponse,
 };
 
-#[derive(Clone)]
-pub struct LinkedApplicationManagerService {
-    state: AppState,
-}
-
-impl LinkedApplicationManagerService {
-    fn applications(&self) -> Result<Arc<ApplicationService>, Status> {
+impl ApplicationManagerService {
+    pub(super) fn link_service(
+        &self
+    ) -> Result<Arc<ApplicationService>, Status> {
         let applications = self
             .state
             .registry_ref()
@@ -60,12 +51,12 @@ impl LinkedApplicationManagerService {
         Ok(applications)
     }
 
-    fn command(
+    pub(super) fn link_command(
         &self,
-        request: LinkedApplicationCommandRequest,
+        request: LinkApplicationCommandRequest,
         name: &str,
         target_required: bool,
-    ) -> Result<Response<LinkedApplicationCommandResponse>, Status> {
+    ) -> Result<Response<LinkApplicationCommandResponse>, Status> {
         let (fleet, link_name) = domain_id(request.id)?;
         let application = request
             .application
@@ -88,11 +79,11 @@ impl LinkedApplicationManagerService {
             runtime: id.runtime.clone(),
             name: id.name.clone(),
         });
-        self.applications()?
+        self.link_service()?
             .forward_command(fleet, &link_name, name, request.payload, target)
             .map_err(link_status)?;
-        Ok(Response::new(LinkedApplicationCommandResponse {
-            id: Some(LinkedApplicationId {
+        Ok(Response::new(LinkApplicationCommandResponse {
+            id: Some(LinkApplicationId {
                 fleet_name: fleet.to_string(),
                 name: link_name,
                 transport: "orbit".to_owned(),
@@ -103,93 +94,15 @@ impl LinkedApplicationManagerService {
     }
 }
 
-#[tonic::async_trait]
-impl LinkedApplicationManager for LinkedApplicationManagerService {
-    async fn list_linked_applications(
-        &self,
-        _request: Request<ListLinkedApplicationsRequest>,
-    ) -> Result<Response<ListLinkedApplicationsResponse>, Status> {
-        let applications =
-            self.applications()?.linked_applications().map_err(link_status)?;
-        Ok(Response::new(ListLinkedApplicationsResponse {
-            captured_at: Some(timestamp(SystemTime::now())?),
-            applications: applications
-                .into_iter()
-                .map(proto_status)
-                .collect::<Result<_, _>>()?,
-        }))
-    }
-
-    async fn get_linked_application_status(
-        &self,
-        request: Request<LinkedApplicationStatusRequest>,
-    ) -> Result<Response<LinkedApplicationStatusResponse>, Status> {
-        let (fleet, name) = domain_id(request.into_inner().id)?;
-        let application = self
-            .applications()?
-            .linked_applications()
-            .map_err(link_status)?
-            .into_iter()
-            .find(|entry| entry.fleet == fleet && entry.name == name)
-            .ok_or_else(|| {
-                Status::not_found(
-                    "linked application is not known to this edge",
-                )
-            })?;
-        Ok(Response::new(LinkedApplicationStatusResponse {
-            captured_at: Some(timestamp(SystemTime::now())?),
-            application: Some(proto_status(application)?),
-        }))
-    }
-
-    async fn start_linked_application(
-        &self,
-        request: Request<LinkedApplicationCommandRequest>,
-    ) -> Result<Response<LinkedApplicationCommandResponse>, Status> {
-        self.command(request.into_inner(), "start", true)
-    }
-
-    async fn stop_linked_application(
-        &self,
-        request: Request<LinkedApplicationCommandRequest>,
-    ) -> Result<Response<LinkedApplicationCommandResponse>, Status> {
-        self.command(request.into_inner(), "stop", true)
-    }
-
-    async fn restart_linked_application(
-        &self,
-        request: Request<LinkedApplicationCommandRequest>,
-    ) -> Result<Response<LinkedApplicationCommandResponse>, Status> {
-        self.command(request.into_inner(), "restart", true)
-    }
-
-    async fn send_linked_command(
-        &self,
-        request: Request<LinkedApplicationCommandRequest>,
-    ) -> Result<Response<LinkedApplicationCommandResponse>, Status> {
-        let request = request.into_inner();
-        let command = request.command.clone();
-        self.command(request, &command, false)
-    }
-}
-
-pub fn create_linked_application_manager(
-    state: AppState
-) -> LinkedApplicationManagerServer<LinkedApplicationManagerService> {
-    LinkedApplicationManagerServer::new(LinkedApplicationManagerService {
-        state,
-    })
-}
-
-fn domain_id(
-    value: Option<LinkedApplicationId>
+pub(super) fn domain_id(
+    value: Option<LinkApplicationId>
 ) -> Result<(FleetName, String), Status> {
     let value = value.ok_or_else(|| {
-        Status::invalid_argument("linked application id is required")
+        Status::invalid_argument("Link application id is required")
     })?;
     if !value.transport.is_empty() && value.transport != "orbit" {
         return Err(Status::unimplemented(
-            "this edge has no controller for that linked transport",
+            "this edge has no controller for that Link transport",
         ));
     }
     let fleet = FleetName::try_new(&value.fleet_name)
@@ -201,14 +114,14 @@ fn domain_id(
     Ok((fleet, value.name))
 }
 
-fn proto_status(
-    value: LinkApplication
-) -> Result<LinkedApplicationStatus, Status> {
+pub(super) fn proto_status(
+    value: DomainLinkApplication
+) -> Result<LinkApplicationStatus, Status> {
     let connected_lanes = value.peers.len() as u32;
     let hosted = hosted_status(&value)?;
-    Ok(LinkedApplicationStatus {
-        info: Some(LinkedApplicationInfo {
-            id: Some(LinkedApplicationId {
+    Ok(LinkApplicationStatus {
+        info: Some(LinkApplicationInfo {
+            id: Some(LinkApplicationId {
                 fleet_name: value.fleet.to_string(),
                 name: value.name,
                 transport: "orbit".to_owned(),
@@ -225,7 +138,7 @@ fn proto_status(
         lanes: value
             .peers
             .into_iter()
-            .map(|peer| LinkedApplicationLane {
+            .map(|peer| LinkApplicationLane {
                 lane: peer.lane as u32,
                 pid: peer.pid,
                 incarnation: peer.incarnation,
@@ -235,7 +148,7 @@ fn proto_status(
 }
 
 fn hosted_status(
-    value: &LinkApplication
+    value: &DomainLinkApplication
 ) -> Result<Option<ListApplicationsResponse>, Status> {
     if value.reports.is_empty() {
         return Ok(None);
@@ -246,7 +159,7 @@ fn hosted_status(
         let snapshot = match decode_link_snapshot_rows(rows) {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                tracing::warn!(%error, "invalid linked application snapshot");
+                tracing::warn!(%error, "invalid Link application snapshot");
                 continue;
             }
         };
@@ -276,21 +189,21 @@ fn hosted_status(
     }))
 }
 
-fn timestamp(value: SystemTime) -> Result<Timestamp, Status> {
+pub(super) fn timestamp(value: SystemTime) -> Result<Timestamp, Status> {
     let elapsed = value.duration_since(UNIX_EPOCH).map_err(|_| {
-        Status::internal("linked application timestamp precedes the Unix epoch")
+        Status::internal("Link application timestamp precedes the Unix epoch")
     })?;
     Ok(Timestamp {
         seconds: i64::try_from(elapsed.as_secs()).map_err(|_| {
             Status::internal(
-                "linked application timestamp exceeds protobuf range",
+                "Link application timestamp exceeds protobuf range",
             )
         })?,
         nanos: elapsed.subsec_nanos() as i32,
     })
 }
 
-fn link_status(error: LinkError) -> Status {
+pub(super) fn link_status(error: LinkError) -> Status {
     match error {
         LinkError::InvalidName { .. } | LinkError::Malformed(_) => {
             Status::invalid_argument(error.to_string())

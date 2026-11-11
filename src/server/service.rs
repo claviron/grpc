@@ -10,7 +10,6 @@ use crate::server::aliases::create_hosting_service;
 use crate::server::applications::create_application_manager;
 use crate::server::control::create_server_service;
 use crate::server::greeter::create_hello_service;
-use crate::server::linked::create_linked_application_manager;
 use crate::server::services::create_service_manager;
 #[cfg(feature = "tasks")]
 use crate::server::tasks::create_task_service;
@@ -34,8 +33,6 @@ pub(crate) fn create_management_routes(
 
     let application_manager = create_application_manager(state.clone())
         .map_err(|status| Error::msg(status.to_string()))?;
-    let linked_application_manager =
-        create_linked_application_manager(state.clone());
     #[cfg(feature = "acme")]
     let acme_service = create_acme_service(state.clone())
         .map_err(|status| Error::msg(status.to_string()))?;
@@ -57,8 +54,7 @@ pub(crate) fn create_management_routes(
         .add_service(hosting_service)
         .add_service(server_service)
         .add_service(service_manager)
-        .add_service(application_manager)
-        .add_service(linked_application_manager);
+        .add_service(application_manager);
 
     #[cfg(feature = "acme")]
     let routes = routes.add_service(acme_service);
@@ -106,7 +102,6 @@ fn management_capabilities() -> Vec<String> {
         "server",
         "services",
         "applications",
-        "linked_applications",
         "hosting",
         "reflection",
         #[cfg(feature = "users")]

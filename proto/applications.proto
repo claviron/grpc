@@ -10,6 +10,15 @@ service ApplicationManager {
   rpc StartApplication(ApplicationCommandRequest) returns (ApplicationCommandResponse);
   rpc StopApplication(ApplicationCommandRequest) returns (ApplicationCommandResponse);
   rpc RestartApplication(ApplicationCommandRequest) returns (ApplicationCommandResponse);
+
+  rpc ListLinkApplications(ListLinkApplicationsRequest) returns (ListLinkApplicationsResponse);
+  rpc GetLinkApplicationStatus(LinkApplicationStatusRequest) returns (LinkApplicationStatusResponse);
+  // These forward application lifecycle requests to the runner. The edge
+  // does not start or stop the runner process.
+  rpc StartLinkApplication(LinkApplicationCommandRequest) returns (LinkApplicationCommandResponse);
+  rpc StopLinkApplication(LinkApplicationCommandRequest) returns (LinkApplicationCommandResponse);
+  rpc RestartLinkApplication(LinkApplicationCommandRequest) returns (LinkApplicationCommandResponse);
+  rpc SendLinkCommand(LinkApplicationCommandRequest) returns (LinkApplicationCommandResponse);
 }
 
 message ApplicationId {
@@ -98,4 +107,73 @@ enum FleetMemberRole {
   FLEET_MEMBER_ROLE_MASTER = 1;
   FLEET_MEMBER_ROLE_WORKER = 2;
   FLEET_MEMBER_ROLE_STANDALONE = 3;
+}
+
+message LinkApplicationId {
+  // Orbit Link destination; several hosted applications may share it.
+  string fleet_name = 1;
+  string name = 2;
+  // Empty retains the legacy Orbit address. Other methods need their own adapter.
+  string transport = 3;
+}
+
+message LinkApplicationInfo {
+  LinkApplicationId id = 1;
+  // Advertised Link runtime. Empty when a configured target has never joined.
+  string runtime = 2;
+}
+
+message ListLinkApplicationsRequest {}
+
+message ListLinkApplicationsResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  repeated LinkApplicationStatus applications = 2;
+}
+
+message LinkApplicationStatusRequest {
+  LinkApplicationId id = 1;
+}
+
+message LinkApplicationStatusResponse {
+  google.protobuf.Timestamp captured_at = 1;
+  LinkApplicationStatus application = 2;
+}
+
+message LinkApplicationStatus {
+  LinkApplicationInfo info = 1;
+  // Link connectivity is independent of the hosted application's lifecycle.
+  LinkReachability link = 2;
+  uint32 connected_lanes = 3;
+  repeated LinkApplicationLane lanes = 4;
+  // The runner's application manager supplies this complete snapshot.
+  // Absent until a connected runner has reported its applications.
+  ListApplicationsResponse hosted = 5;
+}
+
+message LinkApplicationLane {
+  uint32 lane = 1;
+  optional uint32 pid = 2;
+  uint64 incarnation = 3;
+}
+
+message LinkApplicationCommandRequest {
+  LinkApplicationId id = 1;
+  // Application-defined command. The bridge does not execute it.
+  string command = 2;
+  bytes payload = 3;
+  // Required for Start/Stop/Restart; selects one application inside the runner.
+  ApplicationId application = 4;
+}
+
+// Accepted means written to one live Link inbox, not executed by the runner.
+message LinkApplicationCommandResponse {
+  LinkApplicationId id = 1;
+  bool accepted = 2;
+  ApplicationId application = 3;
+}
+
+enum LinkReachability {
+  LINK_REACHABILITY_UNSPECIFIED = 0;
+  LINK_REACHABILITY_CONNECTED = 1;
+  LINK_REACHABILITY_DISCONNECTED = 2;
 }

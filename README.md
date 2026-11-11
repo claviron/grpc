@@ -10,12 +10,14 @@ without enabling the management server. Clients own their channel and TLS setup.
 ## Management surfaces
 
 The base server exposes server identity/reload/shutdown, live hosting and aliases,
-services, embedded applications, linked applications, and reflection.
+services, embedded and Link applications, and reflection.
+Both application types are served by `ApplicationManager` under the
+`applications` capability.
 Optional features add workers, tasks, DNS, registrar-held domains, ACME, local
 certificate issuance, certificate transfer, and a protected metrics endpoint.
 
 These APIs use the runtime's existing authoritative state. gRPC does not launch
-linked runner processes, maintain another worker table, or duplicate service
+Link runner processes, maintain another worker table, or duplicate service
 lifecycle controllers.
 
 ## Features

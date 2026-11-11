@@ -46,9 +46,6 @@ pub mod proto {
     pub mod applications {
         include!(concat!(env!("OUT_DIR"), "/claviron.applications.rs"));
     }
-    pub mod linked_applications {
-        include!(concat!(env!("OUT_DIR"), "/claviron.linked_applications.rs"));
-    }
     pub mod helloworld {
         include!(concat!(env!("OUT_DIR"), "/claviron.helloworld.rs"));
     }
