@@ -38,6 +38,7 @@ impl ManagementGrpcHandler {
 impl BackendHandler for ManagementGrpcHandler {
     fn contract(&self) -> BackendContract {
         BackendContract {
+            execution: claviron::ExecutorSpec::Inherit,
             identity: BackendIdentity::None,
             reply: BackendReply::Owner,
         }
