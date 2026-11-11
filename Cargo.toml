@@ -76,11 +76,11 @@ acme = [
 
 [dependencies]
 # ── Proto / shared server dependencies ───────────────────────────────
-claviron = { version = "0.2.0-alpha.26", path = "../../claviron", default-features = false, optional = true }
+claviron = { version = "0.2.0-alpha.26", default-features = false, optional = true }
 # ── Server-only (gated by `server` feature) ──────────────────────────
-claviron-acme = { version = "0.2.0-alpha.26", path = "../acme", optional = true }
-claviron-dns = { version = "0.2.0-alpha.26", path = "../dns", default-features = false, features = ["service"], optional = true }
-claviron-domains = { version = "0.2.0-alpha.26", path = "../domains", default-features = false, features = ["godaddy", "namecheap"], optional = true }
+claviron-acme = { version = "0.2.0-alpha.26", optional = true }
+claviron-dns = { version = "0.2.0-alpha.26", default-features = false, features = ["service"], optional = true }
+claviron-domains = { version = "0.2.0-alpha.26", default-features = false, features = ["godaddy", "namecheap"], optional = true }
 
 tokio = { version = "1", optional = true, features = ["rt"] }
 async-trait = { version = "0.1", optional = true }
@@ -112,6 +112,6 @@ tonic-prost-build = "0.14"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
-claviron = { version = "0.2.0-alpha.26", path = "../../claviron", default-features = false, features = ["sqlite"] }
+claviron = { version = "0.2.0-alpha.26", default-features = false, features = ["sqlite"] }
 serde_yaml = "0.9"
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "uuid", "time", "sqlite"] }
