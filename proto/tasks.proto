@@ -49,6 +49,40 @@ message TaskStatus {
   TaskTiming timing = 5;
   uint32 concurrency = 7;
   repeated TaskPlacementStatus placements = 8;
+  LinkTaskStatus link_task = 9;
+}
+
+message LinkTaskStatus {
+  string fleet = 1;
+  LinkTaskKind kind = 2;
+  oneof worker_policy {
+    StaticLinkWorkers static_workers = 3;
+    DynamicLinkWorkers dynamic_workers = 4;
+  }
+  // Verified, running command processes managed by this worker task.
+  // Absent for runner tasks or when the process inventory is unavailable.
+  optional uint32 running_workers = 5;
+}
+
+message StaticLinkWorkers {
+  uint32 count = 1;
+}
+
+message DynamicLinkWorkers {
+  uint32 min = 1;
+  oneof maximum {
+    uint32 max = 2;
+    bool available = 5;
+  }
+  uint32 step = 3;
+  // Absent when idle retirement is off.
+  google.protobuf.Duration idle_timeout = 4;
+}
+
+enum LinkTaskKind {
+  LINK_TASK_KIND_UNSPECIFIED = 0;
+  LINK_TASK_KIND_WORKER = 1;
+  LINK_TASK_KIND_RUNNER = 2;
 }
 
 message TaskTiming {
@@ -158,6 +192,7 @@ enum TaskKind {
   TASK_KIND_PHP = 3;
   TASK_KIND_JS = 4;
   TASK_KIND_LUA = 5;
+  TASK_KIND_LINK = 6;
 }
 
 enum TaskScope {

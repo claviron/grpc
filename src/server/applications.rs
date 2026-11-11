@@ -9,6 +9,7 @@ use claviron::app::fleet::{
     FleetApplicationPlacement, FleetApplicationStatus,
 };
 use claviron::app::{
+    ApplicationExecution as DomainApplicationExecution,
     ApplicationId as DomainApplicationId,
     ApplicationLifecycle as DomainApplicationLifecycle, ApplicationName,
     ApplicationRuntime,
@@ -27,14 +28,14 @@ use crate::proto::applications::application_manager_server::{
 };
 use crate::proto::applications::{
     ApplicationCommandRequest, ApplicationCommandResponse,
-    ApplicationDescription, ApplicationId, ApplicationLifecycle,
-    ApplicationPlacement, ApplicationPoolStatus, ApplicationStatus,
-    ApplicationStatusRequest, ApplicationStatusResponse, FleetMember,
-    FleetMemberRole, LinkApplicationCommandRequest,
-    LinkApplicationCommandResponse, LinkApplicationStatusRequest,
-    LinkApplicationStatusResponse, ListApplicationsRequest,
-    ListApplicationsResponse, ListLinkApplicationsRequest,
-    ListLinkApplicationsResponse,
+    ApplicationDescription, ApplicationExecution, ApplicationExecutionKind,
+    ApplicationId, ApplicationLifecycle, ApplicationPlacement,
+    ApplicationPoolStatus, ApplicationStatus, ApplicationStatusRequest,
+    ApplicationStatusResponse, FleetMember, FleetMemberRole,
+    LinkApplicationCommandRequest, LinkApplicationCommandResponse,
+    LinkApplicationStatusRequest, LinkApplicationStatusResponse,
+    ListApplicationsRequest, ListApplicationsResponse,
+    ListLinkApplicationsRequest, ListLinkApplicationsResponse,
 };
 
 #[derive(Clone)]
@@ -103,7 +104,7 @@ impl ApplicationManager for ApplicationManagerService {
         _request: Request<ListLinkApplicationsRequest>,
     ) -> Result<Response<ListLinkApplicationsResponse>, Status> {
         let applications =
-            self.link_service()?.linked_applications().map_err(link_status)?;
+            self.link_service()?.link_applications().map_err(link_status)?;
         Ok(Response::new(ListLinkApplicationsResponse {
             captured_at: Some(link::timestamp(SystemTime::now())?),
             applications: applications
@@ -120,7 +121,7 @@ impl ApplicationManager for ApplicationManagerService {
         let (fleet, name) = link::domain_id(request.into_inner().id)?;
         let application = self
             .link_service()?
-            .linked_applications()
+            .link_applications()
             .map_err(link_status)?
             .into_iter()
             .find(|entry| entry.fleet == fleet && entry.name == name)
@@ -219,6 +220,27 @@ pub(super) fn application_status(
     })
 }
 
+fn application_execution(
+    value: DomainApplicationExecution
+) -> Option<ApplicationExecution> {
+    let (kind, threads) = match value {
+        DomainApplicationExecution::Inherit => {
+            (ApplicationExecutionKind::Inherit, None)
+        }
+        DomainApplicationExecution::Shared => {
+            (ApplicationExecutionKind::Shared, None)
+        }
+        DomainApplicationExecution::DedicatedCurrentThread => {
+            (ApplicationExecutionKind::DedicatedCurrentThread, None)
+        }
+        DomainApplicationExecution::DedicatedMultiThread { threads } => (
+            ApplicationExecutionKind::DedicatedMultiThread,
+            Some(u32::try_from(threads.get()).ok()?),
+        ),
+    };
+    Some(ApplicationExecution { kind: kind as i32, threads })
+}
+
 fn application_placement(
     value: FleetApplicationPlacement
 ) -> Result<ApplicationPlacement, Status> {
@@ -229,6 +251,10 @@ fn application_placement(
             icon: value.description.icon,
             runner: value.description.runner,
             request_mode: value.description.request_mode,
+            execution: value
+                .description
+                .execution
+                .and_then(application_execution),
         }),
         member: Some(member(value.member)),
         lifecycle: match value.lifecycle {

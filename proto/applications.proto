@@ -69,6 +69,20 @@ message ApplicationDescription {
   optional string request_mode = 4;
   // Symbolic client icon code, never a path or URL. Unknown codes use a default.
   optional string icon = 5;
+  ApplicationExecution execution = 6;
+}
+
+message ApplicationExecution {
+  ApplicationExecutionKind kind = 1;
+  optional uint32 threads = 2;
+}
+
+enum ApplicationExecutionKind {
+  APPLICATION_EXECUTION_KIND_UNSPECIFIED = 0;
+  APPLICATION_EXECUTION_KIND_INHERIT = 1;
+  APPLICATION_EXECUTION_KIND_SHARED = 2;
+  APPLICATION_EXECUTION_KIND_DEDICATED_CURRENT_THREAD = 3;
+  APPLICATION_EXECUTION_KIND_DEDICATED_MULTI_THREAD = 4;
 }
 
 message ApplicationPoolStatus {

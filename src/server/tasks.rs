@@ -2,9 +2,11 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use claviron::orbit::config::{WorkerMax, Workers};
 use claviron::runtime::AppState;
 use claviron::tasks::{
-    Error as DomainTaskError, Reason as DomainTaskReason,
+    Error as DomainTaskError, LinkTaskKind as DomainLinkTaskKind,
+    LinkTaskStatus as DomainLinkTaskStatus, Reason as DomainTaskReason,
     TaskDispatch as DomainTaskDispatch,
     TaskExecutionOutcome as DomainTaskExecutionOutcome,
     TaskExecutionResult as DomainTaskExecutionResult,
@@ -22,13 +24,14 @@ use crate::proto::tasks::task_manager_server::{
     TaskManager, TaskManagerServer,
 };
 use crate::proto::tasks::{
-    CronTiming, DaemonTiming, IntervalTiming, ListTasksRequest,
-    ListTasksResponse, ManualTiming, RunTaskFailure, RunTaskFailureKind,
-    RunTaskRequest, RunTaskResponse, RunTaskSuccess, TaskCommandRequest,
-    TaskCommandResponse, TaskDispatch, TaskExecutionOutcome,
-    TaskExecutionResult, TaskKind, TaskLifecycle, TaskMember, TaskMemberRole,
-    TaskPlacementStatus, TaskScope, TaskStatus, TaskStatusRequest,
-    TaskStatusResponse, TaskTiming, run_task_response, task_timing,
+    CronTiming, DaemonTiming, DynamicLinkWorkers, IntervalTiming, LinkTaskKind,
+    LinkTaskStatus, ListTasksRequest, ListTasksResponse, ManualTiming,
+    RunTaskFailure, RunTaskFailureKind, RunTaskRequest, RunTaskResponse,
+    RunTaskSuccess, StaticLinkWorkers, TaskCommandRequest, TaskCommandResponse,
+    TaskDispatch, TaskExecutionOutcome, TaskExecutionResult, TaskKind,
+    TaskLifecycle, TaskMember, TaskMemberRole, TaskPlacementStatus, TaskScope,
+    TaskStatus, TaskStatusRequest, TaskStatusResponse, TaskTiming,
+    dynamic_link_workers, link_task_status, run_task_response, task_timing,
 };
 
 #[derive(Clone)]
@@ -60,9 +63,9 @@ impl TaskManager for TaskService {
         &self,
         _request: Request<ListTasksRequest>,
     ) -> Result<Response<ListTasksResponse>, Status> {
-        Ok(Response::new(snapshot_response(
-            self.manager.list().map_err(manager_status)?,
-        )?))
+        let mut snapshot = self.manager.list().map_err(manager_status)?;
+        self.manager.observe_link_workers(&mut snapshot.tasks).await;
+        Ok(Response::new(snapshot_response(snapshot)?))
     }
 
     async fn get_task_status(
@@ -70,9 +73,12 @@ impl TaskManager for TaskService {
         request: Request<TaskStatusRequest>,
     ) -> Result<Response<TaskStatusResponse>, Status> {
         let name = request.into_inner().name;
-        Ok(Response::new(status_response(
-            self.manager.status(&name).map_err(manager_status)?,
-        )?))
+        let mut snapshot =
+            self.manager.status(&name).map_err(manager_status)?;
+        self.manager
+            .observe_link_workers(std::slice::from_mut(&mut snapshot.task))
+            .await;
+        Ok(Response::new(status_response(snapshot)?))
     }
 
     async fn start_task(
@@ -173,6 +179,7 @@ fn task_status(task: DomainTaskStatus) -> Result<TaskStatus, Status> {
             DomainTaskKind::Php => TaskKind::Php,
             DomainTaskKind::Js => TaskKind::Js,
             DomainTaskKind::Lua => TaskKind::Lua,
+            DomainTaskKind::Link => TaskKind::Link,
         } as i32,
         scope: match task.scope {
             DomainTaskScope::Master => TaskScope::Master,
@@ -186,11 +193,54 @@ fn task_status(task: DomainTaskStatus) -> Result<TaskStatus, Status> {
         } as i32,
         timing: Some(task_timing(task.timing)?),
         concurrency: u32::from(task.concurrency),
+        link_task: task.link_task.map(link_status).transpose()?,
         placements: task
             .placements
             .into_iter()
             .map(task_placement)
             .collect::<Result<_, _>>()?,
+    })
+}
+
+fn link_status(link: DomainLinkTaskStatus) -> Result<LinkTaskStatus, Status> {
+    use link_task_status::WorkerPolicy;
+
+    let worker_policy = match link.workers {
+        Some(Workers::Static { count }) => {
+            Some(WorkerPolicy::StaticWorkers(StaticLinkWorkers {
+                count: count.into(),
+            }))
+        }
+        Some(Workers::Dynamic(policy)) => {
+            let maximum = match policy.max {
+                WorkerMax::Count(count) => {
+                    dynamic_link_workers::Maximum::Max(count.into())
+                }
+                WorkerMax::Named(_) => {
+                    dynamic_link_workers::Maximum::Available(true)
+                }
+            };
+            Some(WorkerPolicy::DynamicWorkers(DynamicLinkWorkers {
+                min: policy.min.into(),
+                maximum: Some(maximum),
+                step: policy.step.into(),
+                idle_timeout: policy
+                    .retire_idle
+                    .timeout()
+                    .map(duration)
+                    .transpose()?,
+            }))
+        }
+        None => None,
+    };
+    Ok(LinkTaskStatus {
+        fleet: link.fleet,
+        kind: match link.kind {
+            DomainLinkTaskKind::Worker => LinkTaskKind::Worker,
+            DomainLinkTaskKind::Runner => LinkTaskKind::Runner,
+        } as i32,
+        worker_policy,
+        running_workers: link.running_workers,
     })
 }
 

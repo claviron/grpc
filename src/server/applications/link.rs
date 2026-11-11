@@ -11,8 +11,7 @@ use claviron::app::fleet::{
 use claviron::app::{ApplicationName, ApplicationRuntime};
 use claviron::edge::VhostResolver;
 use claviron::orbit::link::application::{
-    ApplicationService, ControlTarget, Error as LinkError,
-    LinkedApplication as DomainLinkApplication,
+    ApplicationService, ControlTarget, Error as LinkError, LinkApplication,
 };
 use claviron::runtime::FleetName;
 use prost_types::Timestamp;
@@ -115,7 +114,7 @@ pub(super) fn domain_id(
 }
 
 pub(super) fn proto_status(
-    value: DomainLinkApplication
+    value: LinkApplication
 ) -> Result<LinkApplicationStatus, Status> {
     let connected_lanes = value.peers.len() as u32;
     let hosted = hosted_status(&value)?;
@@ -148,7 +147,7 @@ pub(super) fn proto_status(
 }
 
 fn hosted_status(
-    value: &DomainLinkApplication
+    value: &LinkApplication
 ) -> Result<Option<ListApplicationsResponse>, Status> {
     if value.reports.is_empty() {
         return Ok(None);
