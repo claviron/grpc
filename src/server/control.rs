@@ -56,7 +56,7 @@ impl ServerManager for ServerService {
                         RunMode::Standalone
                     }
                 } as i32,
-                pid: std::process::id(),
+                pid: state.pid(),
                 worker_id: state.worker_id().map(u32::from),
                 started_at,
                 uptime,
@@ -71,7 +71,7 @@ impl ServerManager for ServerService {
             info.workers_running = Some(0);
             info.instance_id = Some(format!(
                 "{}:{}",
-                std::process::id(),
+                state.pid(),
                 state
                     .runtime_started_at()
                     .duration_since(SystemTime::UNIX_EPOCH)
