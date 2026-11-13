@@ -125,7 +125,7 @@ impl AcmeManager for AcmeService {
             Status::invalid_argument("At least one alias is required")
         })?;
         let config = self.acme_config()?;
-        let challenge = self.acme.order_challenge(&config).map_err(acme_status)?;
+        let challenge = self.acme.order_challenge(&config, None).map_err(acme_status)?;
         let result = add_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
@@ -191,7 +191,7 @@ impl AcmeManager for AcmeService {
             })
             .transpose()?;
         let config = self.acme_config()?;
-        let challenge = self.acme.order_challenge(&config).map_err(acme_status)?;
+        let challenge = self.acme.order_challenge(&config, None).map_err(acme_status)?;
         let (certificate, content) = renew_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,

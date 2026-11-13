@@ -1,6 +1,6 @@
 [package]
 name = "claviron-grpc"
-version = "0.2.1"
+version = "0.2.2"
 publish = true
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/claviron/grpc"
@@ -78,7 +78,7 @@ acme = [
 # ── Proto / shared server dependencies ───────────────────────────────
 claviron = { version = "0.2.1", default-features = false, optional = true }
 # ── Server-only (gated by `server` feature) ──────────────────────────
-claviron-acme = { version = "0.2.1", optional = true }
+claviron-acme = { version = "0.2.2", optional = true }
 claviron-dns = { version = "0.2.1", default-features = false, features = ["service"], optional = true }
 claviron-domains = { version = "0.2.1", default-features = false, features = ["godaddy", "namecheap"], optional = true }
 
