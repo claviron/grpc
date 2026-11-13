@@ -10,7 +10,9 @@ use claviron::runtime::registry::Reloadable;
 use claviron::ssl::Sni;
 use claviron::ssl::formatters::certificate_chain_to_pem;
 use claviron::tls::{CertResolver, CertificateManager};
-use claviron_acme::actions::database::{add_cert_to_db, renew_cert_to_db};
+use claviron_acme::actions::database::{
+    add_cert_to_db_with_challenge, renew_cert_to_db_with_challenge,
+};
 use claviron_acme::{AcmeError, AcmeProvider as AcmeConfigService, AcmeStore};
 use tonic::{Request, Response, Status};
 
@@ -123,13 +125,15 @@ impl AcmeManager for AcmeService {
             Status::invalid_argument("At least one alias is required")
         })?;
         let config = self.acme_config()?;
-        let result = add_cert_to_db(
+        let challenge = self.acme.order_challenge(&config).map_err(acme_status)?;
+        let result = add_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
             self.server_id,
             &cn,
             &aliases,
             &config,
+            challenge,
         )
         .await
         .map_err(acme_status)?;
@@ -187,13 +191,15 @@ impl AcmeManager for AcmeService {
             })
             .transpose()?;
         let config = self.acme_config()?;
-        let (certificate, content) = renew_cert_to_db(
+        let challenge = self.acme.order_challenge(&config).map_err(acme_status)?;
+        let (certificate, content) = renew_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
             &config,
             &cn,
             renew_before,
             false,
+            challenge,
         )
         .await
         .map_err(acme_status)?;
