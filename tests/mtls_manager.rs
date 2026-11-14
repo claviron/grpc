@@ -84,8 +84,7 @@ async fn registration_persists_only_public_material_and_reuses_the_same_device()
 }
 
 #[tokio::test]
-async fn file_authority_persists_public_issuer_hierarchy_without_private_keys()
-{
+async fn a_file_authority_does_not_issue_or_store_its_chain() {
     use claviron::ssl::generators;
 
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -118,22 +117,15 @@ async fn file_authority_persists_public_issuer_hierarchy_without_private_keys()
     )
     .unwrap();
     let authority = CertAuthority::new("authority.pem".into(), vec![ca, root]);
-    let issuer = register_file_issuer(&store, &authority).await.unwrap();
-    let repeated = register_file_issuer(&store, &authority).await.unwrap();
-    assert_eq!(issuer.issuer_id(), repeated.issuer_id());
-    let root = store.issuer_by_name("Root CA").await.unwrap().unwrap();
-    let ca = store
-        .certificate_by_cn("Intermediate CA")
-        .await
-        .unwrap()
-        .unwrap()
-        .certificate;
-    assert_eq!(ca.issuer_id, Some(root.id));
-    assert!(ca.key_der.is_empty());
-    let stored_root =
-        store.certificate_by_cn("Root CA").await.unwrap().unwrap().certificate;
-    assert!(stored_root.key_der.is_empty());
-    assert!(CertSigner::from_issuer(&store, "Intermediate CA").await.is_err());
+    let manager =
+        MtlsManager::new(store.clone(), None, Some(Arc::new(authority)));
+    let refused = manager.default_signer().await.err().unwrap();
+    assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
+    // Nothing of the chain is recorded: a CA row is an issuer with its key.
+    assert!(
+        store.certificate_by_cn("Intermediate CA").await.unwrap().is_none()
+    );
+    assert!(store.issuer_by_name("Root CA").await.unwrap().is_none());
 }
 
 #[test]

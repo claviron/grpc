@@ -21,7 +21,7 @@ use claviron::hosting::{
 use claviron::runtime::AppState;
 use claviron::ssl::parsers::take_first_cert_from_der;
 use claviron::ssl::{CommonName, Host, Organization};
-use claviron::tls::{CertAuthority, CertSigner, CertificateStore};
+use claviron::tls::{CertAuthority, CertSigner};
 use time::OffsetDateTime;
 use tonic::Status;
 
@@ -38,7 +38,6 @@ pub struct MtlsManager {
     store: HostingStore,
     server_id: Option<i32>,
     authority: Option<Arc<CertAuthority>>,
-    certificate_store: Option<Arc<CertificateStore>>,
     prepared_signer: Option<Arc<ManagedSigner>>,
     permissions: Option<Arc<PermissionCatalog>>,
     #[cfg(feature = "authorization")]
@@ -315,7 +314,6 @@ impl MtlsManager {
             store,
             server_id,
             authority,
-            certificate_store: None,
             prepared_signer: None,
             permissions: None,
             #[cfg(feature = "authorization")]
@@ -350,8 +348,6 @@ impl MtlsManager {
             hosting.server_id(),
             state.registry_ref().resolve::<CertAuthority>(),
         );
-        manager.certificate_store =
-            state.registry_ref().resolve::<CertificateStore>();
         manager.prepared_signer =
             state.registry_ref().resolve::<ManagedSigner>();
         manager.permissions =
@@ -372,17 +368,22 @@ impl MtlsManager {
         let authority = self.authority.as_ref().ok_or_else(|| {
             Status::failed_precondition("CertStore authority is not configured")
         })?;
-        let signer = match &self.certificate_store {
-            Some(source) => source.signer(authority).await,
-            None => CertSigner::from_authority(&self.store, authority).await,
+        // What is issued is stored with its issuer, and a CA is stored with
+        // its key. A file authority only verifies client certificates.
+        if authority.issuer_id().is_none() {
+            return Err(Status::failed_precondition(
+                "certificate issuance requires a hosting-database local CA with \
+                 its signing key; a file authority only verifies clients",
+            ));
         }
-        .map_err(|error| Status::failed_precondition(error.to_string()))?;
-        let issuer = if authority.issuer_id().is_some() {
-            authority.as_ref().clone()
-        } else {
-            register_file_issuer(&self.store, authority).await?
-        };
-        Ok(Arc::new(ManagedSigner { signer: Arc::new(signer), issuer }))
+        let signer =
+            CertSigner::from_authority(&self.store, authority).await.map_err(
+                |error| Status::failed_precondition(error.to_string()),
+            )?;
+        Ok(Arc::new(ManagedSigner {
+            signer: Arc::new(signer),
+            issuer: authority.as_ref().clone(),
+        }))
     }
 
     #[cfg(feature = "registration")]
@@ -676,76 +677,6 @@ fn registration_root(authority: &CertAuthority) -> Result<&[u8], Status> {
         return Err(Status::failed_precondition("registration CA has no root"));
     }
     Ok(root)
-}
-
-/// Retain the public issuer hierarchy so file-issued leaves use the normal
-/// hosting identity and revocation paths. Private keys stay in CertStore.
-async fn register_file_issuer(
-    store: &HostingStore,
-    authority: &CertAuthority,
-) -> Result<CertAuthority, Status> {
-    let roots = authority.roots();
-    let mut parent = None;
-    for (index, der) in roots.iter().enumerate().rev() {
-        let certificate =
-            take_first_cert_from_der(der.as_ref()).map_err(|_| {
-                Status::failed_precondition("invalid CA certificate")
-            })?;
-        if parent.is_none()
-            && (certificate.subject() != certificate.issuer()
-                || certificate.verify_signature(None).is_err())
-        {
-            return Err(Status::failed_precondition(
-                "file authority must include its root CA",
-            ));
-        }
-        let name = CommonName::read(certificate.subject())
-            .map_err(|_| {
-                Status::failed_precondition("invalid authority common name")
-            })?
-            .ok_or_else(|| {
-                Status::failed_precondition("authority has no common name")
-            })?;
-        if store.issuer_by_name(name).await.map_err(storage_status)?.is_none() {
-            let material = claviron::tls::IssuedCertificate {
-                certs_der: roots[index..]
-                    .iter()
-                    .flat_map(|cert| cert.as_ref().iter().copied())
-                    .collect(),
-                key_der: Vec::new(),
-            };
-            match persist(
-                store,
-                CertificateKind::Ca,
-                name.parse().map_err(|_| {
-                    Status::failed_precondition("invalid authority common name")
-                })?,
-                Vec::new(),
-                parent,
-                None,
-                material,
-            )
-            .await
-            {
-                Ok(_) => (),
-                Err(error) if error.code() == tonic::Code::AlreadyExists => (),
-                Err(error) => return Err(error),
-            }
-        }
-        let issuer = CertAuthority::from_issuer(store, name)
-            .await
-            .map_err(|error| Status::failed_precondition(error.to_string()))?;
-        if issuer.roots() != &roots[index..] {
-            return Err(Status::failed_precondition(
-                "hosting issuer does not match the selected file CA chain",
-            ));
-        }
-        parent = issuer.issuer_id();
-        if index == 0 {
-            return Ok(issuer);
-        }
-    }
-    Err(Status::failed_precondition("file signing authority is empty"))
 }
 
 #[cfg(feature = "registration")]
