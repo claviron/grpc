@@ -109,6 +109,15 @@ impl AcmeService {
             .map_err(|error| Status::failed_precondition(error.to_string()))
     }
 
+    /// This process's client to the CA, as `acme.yaml` declares it.
+    fn client(&self) -> Result<claviron_acme::clients::AcmeClient, Status> {
+        self.acme.client().ok_or_else(|| {
+            Status::failed_precondition(
+                "ACME has no HTTP client: acme.yaml is absent",
+            )
+        })
+    }
+
     fn resolver(&self) -> Result<Arc<CertResolver>, Status> {
         self.state.registry_ref().resolve::<CertResolver>().ok_or_else(|| {
             Status::failed_precondition("Certificate resolver not registered")
@@ -140,6 +149,7 @@ impl AcmeManager for AcmeService {
         })?;
         let config = self.acme_config()?;
         let challenge = self.order_challenge(&config, method)?;
+        let client = self.client()?;
         let result = add_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
@@ -148,6 +158,7 @@ impl AcmeManager for AcmeService {
             &aliases,
             &config,
             challenge,
+            &client,
         )
         .await
         .map_err(acme_status)?;
@@ -217,6 +228,7 @@ impl AcmeManager for AcmeService {
             renew_before,
             false,
             challenge,
+            &self.client()?,
         )
         .await
         .map_err(acme_status)?;
