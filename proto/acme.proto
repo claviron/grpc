@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package claviron.acme;
 
+import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 
 option php_namespace = "Claviron\\Proto\\Acme";
@@ -28,9 +29,20 @@ service AcmeManager {
 }
 
 
+// How the CA validates control of the names. Unset is the server's default,
+// `acme.method` in its configuration. A method the server cannot use is
+// refused before an order is placed.
+enum ChallengeMethod {
+  CHALLENGE_METHOD_DEFAULT = 0;
+  CHALLENGE_METHOD_HTTP_01 = 1;
+  CHALLENGE_METHOD_DNS_01 = 2;
+  CHALLENGE_METHOD_TLS_ALPN_01 = 3;
+}
+
 // Add certificate request
 message AddCertificateRequest {
   repeated string aliases = 1; // multiple alias names first will be cn
+  ChallengeMethod method = 2;
 }
 
 // Get certificate request
@@ -52,7 +64,12 @@ message UpdateCertificateRequest {
 // Renew certificate request
 message RenewCertificateRequest {
   string cn = 1;
-  optional int64  renew_before = 2;
+  // Formerly whole days as an integer.
+  reserved 2;
+  // Renew only when the certificate expires within this long; unset is the
+  // server's configured `renew_before`.
+  google.protobuf.Duration renew_before = 3;
+  ChallengeMethod method = 4;
 }
 
 // Certificate response

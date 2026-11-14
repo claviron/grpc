@@ -96,6 +96,19 @@ impl AcmeService {
         })
     }
 
+    /// The challenge for `method`, refused before any order is placed when
+    /// this server cannot use it: its feature is not built, or what it needs,
+    /// such as a TXT publisher, is not running.
+    fn order_challenge<'a>(
+        &'a self,
+        config: &'a claviron_acme::AcmeConfig,
+        method: Option<claviron_acme::ChallengeMethod>,
+    ) -> Result<claviron_acme::clients::OrderChallenge<'a>, Status> {
+        self.acme
+            .order_challenge(config, method)
+            .map_err(|error| Status::failed_precondition(error.to_string()))
+    }
+
     fn resolver(&self) -> Result<Arc<CertResolver>, Status> {
         self.state.registry_ref().resolve::<CertResolver>().ok_or_else(|| {
             Status::failed_precondition("Certificate resolver not registered")
@@ -109,8 +122,9 @@ impl AcmeManager for AcmeService {
         &self,
         request: Request<AddCertificateRequest>,
     ) -> Result<Response<AddCertificateResponse>, Status> {
+        let request = request.into_inner();
+        let method = challenge_method(request.method)?;
         let aliases = request
-            .into_inner()
             .aliases
             .into_iter()
             .map(|raw| {
@@ -125,8 +139,7 @@ impl AcmeManager for AcmeService {
             Status::invalid_argument("At least one alias is required")
         })?;
         let config = self.acme_config()?;
-        let challenge =
-            self.acme.order_challenge(&config, None).map_err(acme_status)?;
+        let challenge = self.order_challenge(&config, method)?;
         let result = add_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
@@ -183,22 +196,19 @@ impl AcmeManager for AcmeService {
         let cn = Sni::from_str(&req.cn).map_err(|error| {
             Status::invalid_argument(format!("Invalid SNI: {error}"))
         })?;
-        // The protocol carries whole days; the engine takes a duration.
         let renew_before = req
             .renew_before
-            .map(|days| {
-                u64::try_from(days)
-                    .ok()
-                    .and_then(|days| days.checked_mul(86_400))
-                    .map(std::time::Duration::from_secs)
-                    .ok_or_else(|| {
-                        Status::invalid_argument("renew_before is out of range")
-                    })
+            .map(|window| {
+                std::time::Duration::try_from(window).map_err(|_| {
+                    Status::invalid_argument(
+                        "renew_before must not be negative",
+                    )
+                })
             })
             .transpose()?;
+        let method = challenge_method(req.method)?;
         let config = self.acme_config()?;
-        let challenge =
-            self.acme.order_challenge(&config, None).map_err(acme_status)?;
+        let challenge = self.order_challenge(&config, method)?;
         let (certificate, content) = renew_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
@@ -534,6 +544,26 @@ fn hosting_status(error: claviron::hosting::HostingError) -> Status {
     }
 }
 
+/// The method a request names; `None` is the server's default.
+fn challenge_method(
+    value: i32
+) -> Result<Option<claviron_acme::ChallengeMethod>, Status> {
+    use acme_proto::ChallengeMethod as Requested;
+    match Requested::try_from(value) {
+        Ok(Requested::Default) => Ok(None),
+        Ok(Requested::Http01) => {
+            Ok(Some(claviron_acme::ChallengeMethod::Http0))
+        }
+        Ok(Requested::Dns01) => Ok(Some(claviron_acme::ChallengeMethod::Dns01)),
+        Ok(Requested::TlsAlpn01) => {
+            Ok(Some(claviron_acme::ChallengeMethod::TlsAlpn01))
+        }
+        Err(_) => Err(Status::invalid_argument(format!(
+            "unknown challenge method {value}"
+        ))),
+    }
+}
+
 fn acme_status(error: AcmeError) -> Status {
     match error {
         AcmeError::RenewalNotDue { .. } | AcmeError::RecentlyDone(_) => {
@@ -558,8 +588,20 @@ mod tests {
     };
     use time::OffsetDateTime;
 
-    use super::{certificate_filters, certificate_inventory_info};
+    use super::{
+        certificate_filters, certificate_inventory_info, challenge_method,
+    };
     use crate::server::acme::acme_proto::ListCertificatesRequest;
+
+    #[test]
+    fn an_unset_challenge_method_is_the_server_default() {
+        assert_eq!(challenge_method(0).unwrap(), None);
+        assert_eq!(
+            challenge_method(2).unwrap(),
+            Some(claviron_acme::ChallengeMethod::Dns01)
+        );
+        assert!(challenge_method(99).is_err());
+    }
 
     #[test]
     fn certificate_inventory_preserves_dates_aliases_state_and_servers() {
