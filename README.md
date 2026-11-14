@@ -212,17 +212,18 @@ without a client certificate and reaches enrollment alone. The same host keeps
 mutual TLS for ordinary HTTP/2, so enrollment and management can share it.
 
 ```yaml
-# grpc.yaml
+# grpc.yaml: nothing of its own for enrollment
 vhosts: [grpc.example.com]
-enroll_validity_days: 30
 ```
 
 ```yaml
-# the host declaration
+# the host declaration: which host offers enrollment, and on what terms
 grpc.example.com:
   tls:
     client_auth: required
-    alpn: [claviron-mtls-enroll/1]
+    alpn:
+      claviron-mtls-enroll/1:
+        validity_days: 30
 ```
 
 Certificates are issued only from a Hosting CA stored with its signing key,
@@ -235,8 +236,10 @@ issuer in a management issuance RPC selects a Hosting signing key.
 The management host must trust this issuer for client authentication. Its
 server certificate must also chain to the returned root. An enrollment
 session takes the host's HTTP request policy, such as body and timeout
-bounds; the host's routes, files and layers, its quota included, are not
-part of it.
+bounds, and inherits what the host declares to admit and bound callers: the
+trusted proxy identity, deny list, ACL, quotas, access log and metrics. A
+host-level quota therefore limits enrollment attempts. The host's routes,
+files, redirects and headers are not part of the session.
 
 An unauthenticated `HEAD /.well-known/claviron/mtls-enroll` checks
 enrollment and management address selection. It returns 204 when a

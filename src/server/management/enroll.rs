@@ -8,15 +8,14 @@ use async_trait::async_trait;
 use base64ct::{Base64, Encoding};
 use claviron::auth::AnyAuthenticated;
 use claviron::edge::{
-    Host, HostConfig, SessionProfile, SessionProfiles, VhostResolver,
+    Host, Inherit, SessionPlan, SessionProfile, SessionProfiles, VhostResolver,
 };
-use claviron::http::config::HttpPolicy;
 use claviron::http::ext::ConnCtx;
 use claviron::http::{
-    OtherHandler, OtherService, RouteBody, RouteFuture, RouteResponse,
-    RustRouter, bytes_body, empty_body,
+    RouteBody, RouteResponse, ServiceResult, bytes_body, empty_body,
 };
 use claviron::pipeline::plan::HostExecution;
+use claviron::pipeline::{HostHandler, HostHandlerFuture, HostRequest};
 use claviron::runtime::registry::{Bootable, Component, priority};
 use claviron::runtime::{AppState, registry};
 use claviron::ssl::SubjectUri;
@@ -111,7 +110,7 @@ struct EnrollProfile {
 /// Whether any host this process serves offers enrollment.
 fn offered(vhosts: &VhostResolver) -> bool {
     vhosts.snapshot().canonical_entries().any(|(_, record)| {
-        record.config.tls.alpn.iter().any(|id| id.as_bytes() == PROTOCOL)
+        record.config.tls.alpn.keys().any(|id| id.as_bytes() == PROTOCOL)
     })
 }
 
@@ -155,6 +154,14 @@ impl Bootable<AppState, (Arc<CertificateProvider>, Arc<VhostResolver>)>
     }
 }
 
+/// This host's parameters for enrollment, under its id in `tls.alpn`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnrollParams {
+    /// Days an issued certificate is valid.
+    validity_days: NonZeroU32,
+}
+
 impl SessionProfile for EnrollProfile {
     fn protocol(&self) -> &'static [u8] {
         PROTOCOL
@@ -164,13 +171,23 @@ impl SessionProfile for EnrollProfile {
         Proto::H2
     }
 
+    /// Enrollment takes credentials, so it keeps everything the host declares
+    /// to admit and bound them: the real client behind a trusted proxy, the
+    /// deny list and ACL, quotas, the access log and metrics.
+    fn inherits(&self) -> Inherit {
+        Inherit::PROXY
+            | Inherit::DENY
+            | Inherit::ACL
+            | Inherit::QUOTA
+            | Inherit::ACCESS_LOG
+            | Inherit::METRICS
+    }
+
     fn execution(
         &self,
-        state: &AppState,
-        _host: &Host,
-        _config: &Arc<HostConfig>,
-        policy: &HttpPolicy,
+        plan: SessionPlan<'_>,
     ) -> registry::Result<HostExecution> {
+        let state = plan.state();
         if !state.is_master()
             && state.registry_ref().resolve::<ManagedSigner>().is_none()
         {
@@ -184,23 +201,15 @@ impl SessionProfile for EnrollProfile {
             .ok_or_else(|| {
                 registry::Error::msg("mTLS enrollment requires an EnrollGuard")
             })?;
-        let config = self.grpc.config();
-        let validity_days = config.enroll_validity_days.ok_or_else(|| {
-            registry::Error::msg(
-                "enroll_validity_days is required where a host offers mTLS enrollment",
-            )
-        })?;
+        let params: EnrollParams = plan.params()?;
         let handler = EnrollHandler {
             state: state.clone(),
             guard,
-            management_hosts: config.vhosts().to_vec().into(),
-            validity_days,
-            timeout: policy.responses.idle_timeout,
+            management_hosts: self.grpc.config().vhosts().to_vec().into(),
+            validity_days: params.validity_days,
+            timeout: plan.policy().responses.idle_timeout,
         };
-        Ok(HostExecution::router(
-            RustRouter::Other(OtherService::new(handler)),
-            policy.clone(),
-        ))
+        plan.backend(handler)
     }
 }
 
@@ -213,21 +222,16 @@ struct EnrollHandler {
     timeout: Option<std::time::Duration>,
 }
 
-impl OtherHandler for EnrollHandler {
-    fn name(&self) -> &'static str {
-        "mtls_enroll"
-    }
-
+impl HostHandler for EnrollHandler {
     fn call(
         &self,
-        request: Request<RouteBody>,
-    ) -> RouteFuture {
-        // The session reaches nothing else, so any other path is not found.
-        if request.uri().path() != PATH {
-            return Box::pin(std::future::ready(Ok(reply(
-                StatusCode::NOT_FOUND,
-                empty_body(),
-            ))));
+        request: HostRequest,
+    ) -> HostHandlerFuture {
+        // Any other path is not the session's; the plan answers it as unknown.
+        if request.head().uri.path() != PATH {
+            return Box::pin(std::future::ready(ServiceResult::Unhandled(
+                request,
+            )));
         }
         let state = self.state.clone();
         let guard = self.guard.clone();
@@ -235,10 +239,10 @@ impl OtherHandler for EnrollHandler {
         let validity_days = self.validity_days;
         let timeout = self.timeout;
         Box::pin(async move {
-            Ok(head_within(
+            let response = head_within(
                 timeout,
                 enroll(
-                    request,
+                    request.into_request(),
                     &state,
                     guard.as_ref(),
                     validity_days,
@@ -248,7 +252,8 @@ impl OtherHandler for EnrollHandler {
             .await
             .unwrap_or_else(|| {
                 reply(StatusCode::GATEWAY_TIMEOUT, empty_body())
-            }))
+            });
+            ServiceResult::Handled(response)
         })
     }
 }
