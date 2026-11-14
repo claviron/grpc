@@ -47,8 +47,8 @@ the gRPC `dns` feature alone does not supply that deployment.
 
 ```toml
 [dependencies]
-claviron = { version = "0.2.1", default-features = false, features = ["edge", "tls", "postgres"] }
-claviron-grpc = { version = "0.2.1", features = ["server", "workers", "mtls", "certificates"] }
+claviron = { version = "0.2.5", default-features = false, features = ["edge", "tls", "postgres"] }
+claviron-grpc = { version = "0.2.3", features = ["server", "workers", "mtls", "certificates"] }
 ```
 
 ```rust
