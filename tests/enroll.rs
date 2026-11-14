@@ -38,9 +38,15 @@ fn a_device_label_is_one_dns_label() {
     for accepted in ["laptop-cli", "iphone-app", "a", "x1"] {
         assert!(is_device_label(accepted), "{accepted}");
     }
-    for refused in
-        ["", "-cli", "cli-", "Laptop", "laptop.cli", "laptop_cli", &"a".repeat(64)]
-    {
+    for refused in [
+        "",
+        "-cli",
+        "cli-",
+        "Laptop",
+        "laptop.cli",
+        "laptop_cli",
+        &"a".repeat(64),
+    ] {
         assert!(!is_device_label(refused), "{refused}");
     }
 }
