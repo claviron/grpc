@@ -296,9 +296,10 @@ struct EnrollParams {
     validity_days: NonZeroU32,
     /// What a certificate enrolled on this host may be granted beside its
     /// account's own: the bound a client's request meets. Unwritten, nothing.
-    #[cfg(feature = "authorization")]
+    /// Read in every build, so one without `authorization` can say why it
+    /// refuses them.
     #[serde(default)]
-    permissions: Vec<Permission>,
+    permissions: Vec<claviron::auth::permission::Permission>,
 }
 
 impl SessionProfile for EnrollProfile {
@@ -343,6 +344,12 @@ impl SessionProfile for EnrollProfile {
                 registry::Error::msg("mTLS enrollment requires an EnrollGuard")
             })?;
         let params: EnrollParams = plan.params()?;
+        #[cfg(not(feature = "authorization"))]
+        if !params.permissions.is_empty() {
+            return Err(registry::Error::msg(
+                "mTLS enrollment permissions need claviron-grpc built with its authorization feature",
+            ));
+        }
         #[cfg(feature = "authorization")]
         let grantable = if params.permissions.is_empty() {
             Permissions::default()
