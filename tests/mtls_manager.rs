@@ -47,7 +47,7 @@ async fn enrollment_persists_only_public_material_and_reuses_the_same_device() {
         .to_vec()
     };
     let csr = request();
-    let user = || crate::enroll::GrpcUser::new("operator.bison-cli");
+    let user = || crate::enroll::GrpcUser::new("operator.laptop-cli");
     let validity = NonZeroU32::new(1).unwrap();
     let chain =
         manager.register_client(&user(), csr.clone(), validity).await.unwrap();
@@ -58,7 +58,7 @@ async fn enrollment_persists_only_public_material_and_reuses_the_same_device() {
         chain
     );
     let stored = store
-        .certificate_by_cn("operator.bison-cli")
+        .certificate_by_cn("operator.laptop-cli")
         .await
         .unwrap()
         .unwrap()

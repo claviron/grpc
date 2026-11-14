@@ -209,8 +209,8 @@ not verify.
 
 A certificate names one credential, a device, and carries identity only. The
 guard chooses its common name, unique among the hosting store's
-certificates, from the device label the client sends: `ada.bison-cli` for the
-account `ada` enrolling from `claviron-client` on `bison`. A stable subject URI
+certificates, from the device label the client sends: `ada.laptop-cli` for the
+account `ada` enrolling from `claviron-client` on `laptop`. A stable subject URI
 names the account, the same in every certificate it holds, so an account can
 enroll several devices and each is revoked alone. What the account may do
 stays with the application and is decided when a client connects; no
@@ -273,7 +273,7 @@ Send `POST /.well-known/claviron/mtls-enroll` with JSON fields `credential`,
 to 63 lowercase letters, digits and hyphens:
 
 ```json
-{"credential": {"password": {"username": "ada", "password": "…"}}, "device": "bison-cli", "csr_der": "…"}
+{"credential": {"password": {"username": "ada", "password": "…"}}, "device": "laptop-cli", "csr_der": "…"}
 {"credential": {"token": "…"}, "device": "iphone-app", "csr_der": "…"}
 ```
 

@@ -3,7 +3,7 @@ use super::{Credential, Enrollment, is_device_label};
 #[test]
 fn an_enrollment_names_its_credential_kind() {
     let password: Enrollment = serde_json::from_str(
-        r#"{"credential":{"password":{"username":"ada","password":"secret"}},"device":"bison-cli","csr_der":"AA=="}"#,
+        r#"{"credential":{"password":{"username":"ada","password":"secret"}},"device":"laptop-cli","csr_der":"AA=="}"#,
     )
     .unwrap();
     assert!(matches!(
@@ -13,13 +13,13 @@ fn an_enrollment_names_its_credential_kind() {
     ));
 
     let token: Enrollment = serde_json::from_str(
-        r#"{"credential":{"token":"invite"},"device":"bison-cli","csr_der":"AA=="}"#,
+        r#"{"credential":{"token":"invite"},"device":"laptop-cli","csr_der":"AA=="}"#,
     )
     .unwrap();
     assert!(
         matches!(token.credential, Credential::Token(ref token) if token == "invite")
     );
-    assert_eq!(token.device, "bison-cli");
+    assert_eq!(token.device, "laptop-cli");
 
     // A credential without its kind, or with a field of no kind, is refused.
     for refused in [
@@ -35,11 +35,11 @@ fn an_enrollment_names_its_credential_kind() {
 
 #[test]
 fn a_device_label_is_one_dns_label() {
-    for accepted in ["bison-cli", "iphone-app", "a", "x1"] {
+    for accepted in ["laptop-cli", "iphone-app", "a", "x1"] {
         assert!(is_device_label(accepted), "{accepted}");
     }
     for refused in
-        ["", "-cli", "cli-", "Bison", "bison.cli", "bison_cli", &"a".repeat(64)]
+        ["", "-cli", "cli-", "Laptop", "laptop.cli", "laptop_cli", &"a".repeat(64)]
     {
         assert!(!is_device_label(refused), "{refused}");
     }

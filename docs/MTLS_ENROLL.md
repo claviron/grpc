@@ -53,7 +53,7 @@ else on this path is for them.
 ```json
 {
   "credential": {"password": {"username": "ada", "password": "…"}},
-  "device": "bison-cli",
+  "device": "laptop-cli",
   "permissions": ["deploy.release"],
   "csr_der": "MIH…"
 }
@@ -62,7 +62,7 @@ else on this path is for them.
 | Field | Meaning |
 | --- | --- |
 | `credential` | What the client presents, by kind: `{"password": {"username", "password"}}` or `{"token": "…"}`. The server's application accepts the kinds it supports. |
-| `device` | The client's label for this device: one DNS label, 1 to 63 lowercase letters, digits and hyphens, not starting or ending with a hyphen. Clients derive `<short-hostname>-<client>`, such as `bison-cli` or `bison-app`. A label proves nothing; it names. |
+| `device` | The client's label for this device: one DNS label, 1 to 63 lowercase letters, digits and hyphens, not starting or ending with a hyphen. Clients derive `<short-hostname>-<client>`, such as `laptop-cli` or `laptop-app`. A label proves nothing; it names. |
 | `permissions` | Optional, only on a server built with `authorization`: permission names from the server's catalog, asked for this certificate beside the account's own. A request must stay within the host's `permissions`; asking grants nothing, the guard decides within the same bound. A server that cannot grant permissions refuses a request naming them. |
 | `csr_der` | A PKCS#10 request, base64 DER, signed with the device key. Its subject and attributes are ignored: the server takes its public key. |
 
@@ -99,7 +99,7 @@ A certificate names one credential and carries identity only.
 
 ```text
 CN   the credential's name, unique among the store's certificates:
-     ada.bison-cli, ada.iphone-app
+     ada.laptop-cli, ada.iphone-app
 URI  the account, the same in every certificate it holds: urn:uuid:…
 ```
 
