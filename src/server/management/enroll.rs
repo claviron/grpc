@@ -123,6 +123,28 @@ pub struct EnrollRequest<'a> {
     pub permissions: &'a Permissions,
 }
 
+impl<'a> EnrollRequest<'a> {
+    /// A request asking for no permissions, as a guard's own tests build one.
+    pub fn new(
+        credential: &'a Credential,
+        device: &'a str,
+    ) -> Self {
+        Self {
+            credential,
+            device,
+            #[cfg(feature = "authorization")]
+            permissions: no_permissions(),
+        }
+    }
+}
+
+#[cfg(feature = "authorization")]
+fn no_permissions() -> &'static Permissions {
+    static NONE: std::sync::LazyLock<Permissions> =
+        std::sync::LazyLock::new(Permissions::default);
+    &NONE
+}
+
 /// A certificate enrollment issued, as its guard granted it.
 #[non_exhaustive]
 pub struct Enrolled<'a> {
