@@ -208,8 +208,11 @@ grant. The role and permission manager remains optional.
 
 Enrollment is a session profile: a host offers it by listing its ALPN id,
 `claviron-mtls-enroll/1`, and a client that offers that id gets a handshake
-without a client certificate and reaches enrollment alone. The same host keeps
-mutual TLS for ordinary HTTP/2, so enrollment and management can share it.
+without a client certificate and reaches enrollment alone. The connection
+preface decides the HTTP version: a tool that enrolls and exits can send its
+one request over HTTP/1.1, an application keeping the connection HTTP/2. The
+same host keeps mutual TLS for ordinary HTTP/2, so enrollment and management
+can share it.
 
 ```yaml
 # grpc.yaml: nothing of its own for enrollment

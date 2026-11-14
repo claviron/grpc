@@ -19,8 +19,7 @@ use claviron::pipeline::{HostHandler, HostHandlerFuture, HostRequest};
 use claviron::runtime::registry::{Bootable, Component, priority};
 use claviron::runtime::{AppState, registry};
 use claviron::ssl::SubjectUri;
-use claviron::tls::Proto;
-use claviron::tls::{CertResolver, CertificateProvider};
+use claviron::tls::{CertResolver, CertificateProvider, SessionWire};
 use http::{Method, Request, Response, StatusCode, header};
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
@@ -167,8 +166,10 @@ impl SessionProfile for EnrollProfile {
         PROTOCOL
     }
 
-    fn wire(&self) -> Proto {
-        Proto::H2
+    /// A tool that enrolls and exits sends one request over HTTP/1.1; an
+    /// application that keeps the connection speaks HTTP/2.
+    fn wire(&self) -> SessionWire {
+        SessionWire::Either
     }
 
     /// Enrollment takes credentials, so it keeps everything the host declares
