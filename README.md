@@ -201,8 +201,11 @@ that supports gRPC over H3.
 ## mTLS enrollment
 
 Build with `enroll` and register an `EnrollGuard` with
-`server::management::enroll::register_guard`. The guard verifies credentials and grants
-`grpc.access` by returning a `GrpcUser`. A guard can issue a CN-only identity
+`server::management::enroll::register_guard`. The guard verifies the
+`Credential` a client presents and grants `grpc.access` by returning a
+`GrpcUser`. The client chooses the kind, a password or a token the
+application issued; the guard accepts the kinds it supports and refuses the
+rest as it refuses a credential that does not verify. A guard can issue a CN-only identity
 or attach a stable subject URI. The latter includes the signed `grpc.access`
 grant. The role and permission manager remains optional.
 
@@ -249,8 +252,15 @@ enrollment and management address selection. It returns 204 when a
 management address is available or 503 otherwise. Both responses carry
 `Claviron-Mtls-Enroll: 1`.
 
-Send `POST /.well-known/claviron/mtls-enroll` with JSON fields `username`,
-`password`, and `csr_der` (base64 PKCS#10 DER). HTTP 201 returns
+Send `POST /.well-known/claviron/mtls-enroll` with JSON fields `credential`
+and `csr_der` (base64 PKCS#10 DER). The credential names its kind:
+
+```json
+{"credential": {"password": {"username": "ada", "password": "…"}}, "csr_der": "…"}
+{"credential": {"token": "…"}, "csr_der": "…"}
+```
+
+HTTP 201 returns
 `management_address`, `certificate_chain_pem` (the client leaf and any
 intermediates), and `authority_certificate_pem` (the root CA). The address
 uses the first concrete SNI served over TLS/H2 from the configured `vhosts`

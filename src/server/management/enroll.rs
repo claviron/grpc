@@ -65,14 +65,48 @@ impl GrpcUser {
     }
 }
 
-/// Verify credentials and authorize grpc.access before returning a GrpcUser.
-/// Applications own password verification, access policy and account status.
+/// What a client presents to enroll, chosen by the client. Which kinds a
+/// server accepts is its guard's to say; a kind it does not take is refused
+/// like a credential that does not verify.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[non_exhaustive]
+pub enum Credential {
+    /// An account name and its password.
+    Password { username: String, password: String },
+    /// A token the application issued, such as an invitation.
+    Token(String),
+}
+
+impl Credential {
+    /// Who presented it, for the operator's log; never the secret.
+    fn presenter(&self) -> Presenter<'_> {
+        Presenter(self)
+    }
+}
+
+struct Presenter<'a>(&'a Credential);
+
+impl std::fmt::Display for Presenter<'_> {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        match self.0 {
+            Credential::Password { username, .. } => write!(f, "{username:?}"),
+            Credential::Token(_) => f.write_str("a token"),
+        }
+    }
+}
+
+/// Verify a credential and authorize grpc.access before returning a GrpcUser.
+/// Applications own credential verification, access policy and account
+/// status.
 #[async_trait]
 pub trait EnrollGuard: Send + Sync + 'static {
     async fn authorize(
         &self,
-        username: &str,
-        password: &str,
+        credential: &Credential,
     ) -> Result<GrpcUser, AccessError>;
 }
 
@@ -262,8 +296,7 @@ impl HostHandler for EnrollHandler {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Enrollment {
-    username: String,
-    password: String,
+    credential: Credential,
     csr_der: String,
 }
 
@@ -405,26 +438,26 @@ async fn enroll(
     let Ok(csr) = Base64::decode_vec(&input.csr_der) else {
         return reply(StatusCode::BAD_REQUEST, empty_body());
     };
-    let user = match guard.authorize(&input.username, &input.password).await {
+    let user = match guard.authorize(&input.credential).await {
         Ok(user) => user,
         Err(AccessError::Unauthenticated) => {
             tracing::warn!(
-                "mTLS enrollment did not accept the credentials of {:?} from {client}",
-                input.username
+                "mTLS enrollment did not accept the credential of {} from {client}",
+                input.credential.presenter()
             );
             return reply(StatusCode::UNAUTHORIZED, empty_body());
         }
         Err(AccessError::Forbidden) => {
             tracing::warn!(
-                "mTLS enrollment is forbidden for {:?} from {client}",
-                input.username
+                "mTLS enrollment is forbidden for {} from {client}",
+                input.credential.presenter()
             );
             return reply(StatusCode::FORBIDDEN, empty_body());
         }
         Err(AccessError::Unavailable) => {
             tracing::warn!(
-                "mTLS enrollment could not reach its access policy for {:?} from {client}",
-                input.username
+                "mTLS enrollment could not reach its access policy for {} from {client}",
+                input.credential.presenter()
             );
             return reply(StatusCode::SERVICE_UNAVAILABLE, empty_body());
         }
@@ -443,8 +476,8 @@ async fn enroll(
     match result {
         Ok(issued) => {
             tracing::info!(
-                "mTLS enrollment issued a client certificate to {:?} at {client}",
-                input.username
+                "mTLS enrollment issued a client certificate to {} at {client}",
+                input.credential.presenter()
             );
             let Ok(body) = serde_json::to_vec(&EnrollResponse {
                 management_address,
@@ -464,8 +497,8 @@ async fn enroll(
             let status = match error.code() {
                 Code::AlreadyExists => {
                     tracing::warn!(
-                        "mTLS enrollment found an existing certificate for {:?} from {client}",
-                        input.username
+                        "mTLS enrollment found an existing certificate for {} from {client}",
+                        input.credential.presenter()
                     );
                     StatusCode::CONFLICT
                 }
@@ -498,3 +531,7 @@ fn reply(
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     response
 }
+
+#[cfg(test)]
+#[path = "../../../tests/enroll.rs"]
+mod tests;
