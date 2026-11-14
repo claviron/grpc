@@ -101,6 +101,7 @@ core.*
 !README.md
 !SKILL.md
 !CONTRIBUTING.md
+!/docs/*.md
 /Cargo.lock
 
 /.cargo/config.toml

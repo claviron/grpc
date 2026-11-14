@@ -6,7 +6,8 @@ use std::sync::Arc;
 use crate::server::head_within;
 use async_trait::async_trait;
 use base64ct::{Base64, Encoding};
-use claviron::auth::AnyAuthenticated;
+#[cfg(feature = "authorization")]
+use claviron::auth::permission::{Permission, PermissionCatalog, Permissions};
 use claviron::edge::{
     Host, Inherit, SessionPlan, SessionProfile, SessionProfiles, VhostResolver,
 };
@@ -39,8 +40,8 @@ pub const PATH: &str = "/.well-known/claviron/mtls-enroll";
 // Bounds the v1 JSON envelope, including the base64-encoded PKCS#10 request.
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 
-/// What a guard grants: the application's actor and the certificate it
-/// issues. The client chooses none of it.
+/// What a guard grants: the certificate it issues. The client chooses none
+/// of it.
 ///
 /// The common name names this one credential, unique in the hosting store
 /// and the handle every consumer uses for it: admission, a VPN address,
@@ -48,19 +49,44 @@ const MAX_REQUEST_BYTES: usize = 16 * 1024;
 /// certificates. A certificate carries identity only; what the account may do
 /// stays with the application.
 pub struct GrpcUser {
-    actor: AnyAuthenticated,
     common_name: Box<str>,
     subject: Option<SubjectUri>,
+    #[cfg(feature = "authorization")]
+    permissions: Permissions,
 }
 
 impl GrpcUser {
-    /// Issue the certificate named `common_name` for `actor`, such as
-    /// `ada.bison-cli` for one device of the account `ada`.
-    pub fn new(
-        actor: AnyAuthenticated,
-        common_name: impl Into<Box<str>>,
+    /// Issue the certificate named `common_name`, such as `ada.bison-cli`
+    /// for one device of the account `ada`.
+    pub fn new(common_name: impl Into<Box<str>>) -> Self {
+        Self {
+            common_name: common_name.into(),
+            subject: None,
+            #[cfg(feature = "authorization")]
+            permissions: Permissions::default(),
+        }
+    }
+
+    /// Grant these beside the account's own, for connections that present
+    /// this certificate only. They are the application's to record when
+    /// [`EnrollGuard::enrolled`] reports the certificate issued, and to apply
+    /// when such a connection is admitted; none is signed into it.
+    #[cfg(feature = "authorization")]
+    pub fn with_permissions(
+        mut self,
+        permissions: Permissions,
     ) -> Self {
-        Self { actor, common_name: common_name.into(), subject: None }
+        self.permissions = permissions;
+        self
+    }
+
+    fn enrolled(&self) -> Enrolled<'_> {
+        Enrolled {
+            common_name: &self.common_name,
+            subject: self.subject.as_ref(),
+            #[cfg(feature = "authorization")]
+            permissions: &self.permissions,
+        }
     }
 
     /// Name the account with a stable subject URI, the same in every
@@ -73,10 +99,12 @@ impl GrpcUser {
         self
     }
 
-    pub(crate) fn into_parts(
-        self
-    ) -> (AnyAuthenticated, Box<str>, Option<SubjectUri>) {
-        (self.actor, self.common_name, self.subject)
+    pub(crate) fn common_name(&self) -> &str {
+        &self.common_name
+    }
+
+    pub(crate) fn subject(&self) -> Option<&SubjectUri> {
+        self.subject.as_ref()
     }
 }
 
@@ -86,9 +114,24 @@ pub struct EnrollRequest<'a> {
     /// What the client presents.
     pub credential: &'a Credential,
     /// The client's label for the device it enrolls, a DNS label such as
-    /// `bison-cli`. A guard may name the certificate after it; it proves
+    /// `bison-cli`. A guard names the certificate after it; it proves
     /// nothing.
-    pub device: Option<&'a str>,
+    pub device: &'a str,
+    /// Permissions the client asks for this certificate beside the account's
+    /// own, each defined in the server's catalog. Asking grants nothing.
+    #[cfg(feature = "authorization")]
+    pub permissions: &'a Permissions,
+}
+
+/// A certificate enrollment issued, as its guard granted it.
+#[non_exhaustive]
+pub struct Enrolled<'a> {
+    pub common_name: &'a str,
+    pub subject: Option<&'a SubjectUri>,
+    /// What connections presenting this certificate are granted beside the
+    /// account's own.
+    #[cfg(feature = "authorization")]
+    pub permissions: &'a Permissions,
 }
 
 /// What a client presents to enroll, chosen by the client. Which kinds a
@@ -134,6 +177,16 @@ pub trait EnrollGuard: Send + Sync + 'static {
         &self,
         request: &EnrollRequest<'_>,
     ) -> Result<GrpcUser, AccessError>;
+
+    /// The certificate was issued, or an issued one returned again for the
+    /// same key. An application that keeps per-certificate state, such as its
+    /// grants, records it here; a failure answers 503 and the client retries.
+    async fn enrolled(
+        &self,
+        _enrolled: &Enrolled<'_>,
+    ) -> Result<(), AccessError> {
+        Ok(())
+    }
 }
 
 pub fn register_guard<G: EnrollGuard>(
@@ -323,8 +376,12 @@ impl HostHandler for EnrollHandler {
 #[serde(deny_unknown_fields)]
 struct Enrollment {
     credential: Credential,
+    device: String,
+    /// Without `authorization` a request naming permissions is refused as
+    /// malformed: this server cannot grant them.
+    #[cfg(feature = "authorization")]
     #[serde(default)]
-    device: Option<String>,
+    permissions: Vec<Permission>,
     csr_der: String,
 }
 
@@ -478,12 +535,19 @@ async fn enroll(
     let Ok(csr) = Base64::decode_vec(&input.csr_der) else {
         return reply(StatusCode::BAD_REQUEST, empty_body());
     };
-    if input.device.as_deref().is_some_and(|device| !is_device_label(device)) {
+    if !is_device_label(&input.device) {
         return reply(StatusCode::BAD_REQUEST, empty_body());
     }
+    #[cfg(feature = "authorization")]
+    let permissions = match requested_permissions(state, &input.permissions) {
+        Some(permissions) => permissions,
+        None => return reply(StatusCode::BAD_REQUEST, empty_body()),
+    };
     let request = EnrollRequest {
         credential: &input.credential,
-        device: input.device.as_deref(),
+        device: &input.device,
+        #[cfg(feature = "authorization")]
+        permissions: &permissions,
     };
     let user = match guard.authorize(&request).await {
         Ok(user) => user,
@@ -517,11 +581,18 @@ async fn enroll(
         return reply(StatusCode::SERVICE_UNAVAILABLE, empty_body());
     };
     let result = match MtlsManager::from_state(state) {
-        Ok(manager) => manager.register_client(user, csr, validity_days).await,
+        Ok(manager) => manager.register_client(&user, csr, validity_days).await,
         Err(error) => Err(error),
     };
     match result {
         Ok(issued) => {
+            if guard.enrolled(&user.enrolled()).await.is_err() {
+                tracing::warn!(
+                    "mTLS enrollment could not record the certificate of {} from {client}",
+                    input.credential.presenter()
+                );
+                return reply(StatusCode::SERVICE_UNAVAILABLE, empty_body());
+            }
             tracing::info!(
                 "mTLS enrollment issued a client certificate to {} at {client}",
                 input.credential.presenter()
@@ -565,6 +636,23 @@ async fn enroll(
             reply(status, empty_body())
         }
     }
+}
+
+/// What a request asks, each name defined in the server's catalog; `None`
+/// when a name is not, or permissions are asked of a server defining none.
+#[cfg(feature = "authorization")]
+fn requested_permissions(
+    state: &AppState,
+    requested: &[Permission],
+) -> Option<Permissions> {
+    if requested.is_empty() {
+        return Some(Permissions::default());
+    }
+    state
+        .registry_ref()
+        .resolve::<PermissionCatalog>()?
+        .validate(requested)
+        .ok()
 }
 
 fn reply(

@@ -3,7 +3,7 @@ use super::{Credential, Enrollment, is_device_label};
 #[test]
 fn an_enrollment_names_its_credential_kind() {
     let password: Enrollment = serde_json::from_str(
-        r#"{"credential":{"password":{"username":"ada","password":"secret"}},"csr_der":"AA=="}"#,
+        r#"{"credential":{"password":{"username":"ada","password":"secret"}},"device":"bison-cli","csr_der":"AA=="}"#,
     )
     .unwrap();
     assert!(matches!(
@@ -12,8 +12,6 @@ fn an_enrollment_names_its_credential_kind() {
             if username == "ada" && password == "secret"
     ));
 
-    assert_eq!(password.device, None);
-
     let token: Enrollment = serde_json::from_str(
         r#"{"credential":{"token":"invite"},"device":"bison-cli","csr_der":"AA=="}"#,
     )
@@ -21,7 +19,7 @@ fn an_enrollment_names_its_credential_kind() {
     assert!(
         matches!(token.credential, Credential::Token(ref token) if token == "invite")
     );
-    assert_eq!(token.device.as_deref(), Some("bison-cli"));
+    assert_eq!(token.device, "bison-cli");
 
     // A credential without its kind, or with a field of no kind, is refused.
     for refused in [

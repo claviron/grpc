@@ -209,12 +209,19 @@ not verify.
 
 A certificate names one credential, a device, and carries identity only. The
 guard chooses its common name, unique among the hosting store's
-certificates, often from the device label the client sends: `ada.bison-cli`
-for the account `ada` enrolling from `claviron-client` on `bison`. A stable
-subject URI names the account, the same in every certificate it holds, so an
-account can enroll several devices and each is revoked alone. What the account
-may do stays with the application and is decided when a client connects; no
+certificates, from the device label the client sends: `ada.bison-cli` for the
+account `ada` enrolling from `claviron-client` on `bison`. A stable subject URI
+names the account, the same in every certificate it holds, so an account can
+enroll several devices and each is revoked alone. What the account may do
+stays with the application and is decided when a client connects; no
 permission is signed into the certificate.
+
+With `authorization`, a client may also ask for permissions defined in the
+server's catalog, for connections presenting this certificate only. The guard
+grants what it allows with `GrpcUser::with_permissions`, and records them in
+`EnrollGuard::enrolled`, called once the certificate is issued; its access
+policy applies them when such a connection is admitted. [mTLS
+Enrollment](docs/MTLS_ENROLL.md) is the protocol's contract.
 
 Enrollment is a session profile: a host offers it by listing its ALPN id,
 `claviron-mtls-enroll/1`, and a client that offers that id gets a handshake
@@ -260,9 +267,9 @@ management address is available or 503 otherwise. Both responses carry
 `Claviron-Mtls-Enroll: 1`.
 
 Send `POST /.well-known/claviron/mtls-enroll` with JSON fields `credential`,
-optional `device` and `csr_der` (base64 PKCS#10 DER). The credential names
-its kind; the device is one DNS label, 1 to 63 lowercase letters, digits and
-hyphens:
+`device`, `csr_der` (base64 PKCS#10 DER) and, with `authorization`, optional
+`permissions`. The credential names its kind; the device is one DNS label, 1
+to 63 lowercase letters, digits and hyphens:
 
 ```json
 {"credential": {"password": {"username": "ada", "password": "…"}}, "device": "bison-cli", "csr_der": "…"}

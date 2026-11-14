@@ -398,14 +398,14 @@ impl MtlsManager {
     #[cfg(feature = "enroll")]
     pub(crate) async fn register_client(
         &self,
-        user: super::enroll::GrpcUser,
+        user: &super::enroll::GrpcUser,
         csr: Vec<u8>,
         validity_days: std::num::NonZeroU32,
     ) -> Result<super::enroll::Issued, Status> {
         use claviron::ssl::formatters::certificate_chain_to_pem;
 
-        let (_actor, common_name, subject) = user.into_parts();
-        let name = common_name.parse::<CommonName>().map_err(|_| {
+        let subject = user.subject().cloned();
+        let name = user.common_name().parse::<CommonName>().map_err(|_| {
             Status::failed_precondition("invalid enrollment identity")
         })?;
         let managed = self.default_signer().await?;

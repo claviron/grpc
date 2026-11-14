@@ -3,26 +3,9 @@ use super::*;
 #[cfg(feature = "enroll")]
 #[tokio::test]
 async fn enrollment_persists_only_public_material_and_reuses_the_same_device() {
-    use std::{any::Any, borrow::Cow, num::NonZeroU32};
+    use std::num::NonZeroU32;
 
-    use claviron::auth::Authenticated;
     use claviron::ssl::{Organization, generators};
-
-    struct Operator;
-
-    impl Authenticated for Operator {
-        fn auth_subject(&self) -> Cow<'_, str> {
-            "operator".into()
-        }
-
-        fn auth_identifier(&self) -> &str {
-            "operator"
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-    }
 
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
@@ -64,16 +47,14 @@ async fn enrollment_persists_only_public_material_and_reuses_the_same_device() {
         .to_vec()
     };
     let csr = request();
-    let user = || {
-        crate::enroll::GrpcUser::new(Arc::new(Operator), "operator.bison-cli")
-    };
+    let user = || crate::enroll::GrpcUser::new("operator.bison-cli");
     let validity = NonZeroU32::new(1).unwrap();
     let chain =
-        manager.register_client(user(), csr.clone(), validity).await.unwrap();
+        manager.register_client(&user(), csr.clone(), validity).await.unwrap();
     assert_eq!(chain.authority_certificate_pem, root_pem);
     assert!(!chain.certificate_chain_pem.contains(&root_pem));
     assert_eq!(
-        manager.register_client(user(), csr, validity).await.unwrap(),
+        manager.register_client(&user(), csr, validity).await.unwrap(),
         chain
     );
     let stored = store
@@ -83,8 +64,10 @@ async fn enrollment_persists_only_public_material_and_reuses_the_same_device() {
         .unwrap()
         .certificate;
     assert!(stored.key_der.is_none());
-    let rejected =
-        manager.register_client(user(), request(), validity).await.unwrap_err();
+    let rejected = manager
+        .register_client(&user(), request(), validity)
+        .await
+        .unwrap_err();
     assert_eq!(rejected.code(), tonic::Code::AlreadyExists);
 }
 
