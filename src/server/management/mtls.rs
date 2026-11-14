@@ -402,31 +402,12 @@ impl MtlsManager {
         csr: Vec<u8>,
         validity_days: std::num::NonZeroU32,
     ) -> Result<super::enroll::Issued, Status> {
-        use claviron::auth::permission::PermissionDefinition;
         use claviron::ssl::formatters::certificate_chain_to_pem;
 
-        let (actor, subject) = user.into_parts();
-        let name =
-            actor.auth_identifier().parse::<CommonName>().map_err(|_| {
-                Status::failed_precondition("invalid enrollment identity")
-            })?;
-        let permissions = if subject.is_some() {
-            let mut catalog = PermissionCatalog::new();
-            catalog
-                .register_name(crate::permission::GrpcAccess::NAME)
-                .map_err(|_| {
-                    Status::internal("invalid enrollment permission")
-                })?;
-            Some(
-                catalog
-                    .validate([crate::permission::GrpcAccess::NAME])
-                    .map_err(|_| {
-                        Status::internal("invalid enrollment permission")
-                    })?,
-            )
-        } else {
-            None
-        };
+        let (_actor, common_name, subject) = user.into_parts();
+        let name = common_name.parse::<CommonName>().map_err(|_| {
+            Status::failed_precondition("invalid enrollment identity")
+        })?;
         let managed = self.default_signer().await?;
         let issuer = managed.issuer_id();
         let signer = managed.signer.clone();
@@ -441,7 +422,8 @@ impl MtlsManager {
                 &csr,
                 &signing_name,
                 subject.as_ref(),
-                permissions.as_ref(),
+                // Identity only: what the account may do is the application's.
+                None,
                 validity_days.get(),
             )
         })

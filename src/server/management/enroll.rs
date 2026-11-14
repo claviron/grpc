@@ -39,19 +39,32 @@ pub const PATH: &str = "/.well-known/claviron/mtls-enroll";
 // Bounds the v1 JSON envelope, including the base64-encoded PKCS#10 request.
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 
-/// The authorized application identity. The client cannot choose its claims.
+/// What a guard grants: the application's actor and the certificate it
+/// issues. The client chooses none of it.
+///
+/// The common name names this one credential, unique in the hosting store
+/// and the handle every consumer uses for it: admission, a VPN address,
+/// revocation. The subject URI names the account, the same across its
+/// certificates. A certificate carries identity only; what the account may do
+/// stays with the application.
 pub struct GrpcUser {
     actor: AnyAuthenticated,
+    common_name: Box<str>,
     subject: Option<SubjectUri>,
 }
 
 impl GrpcUser {
-    /// Use the authenticated actor's identifier as the client certificate CN.
-    pub fn new(actor: AnyAuthenticated) -> Self {
-        Self { actor, subject: None }
+    /// Issue the certificate named `common_name` for `actor`, such as
+    /// `ada.bison-cli` for one device of the account `ada`.
+    pub fn new(
+        actor: AnyAuthenticated,
+        common_name: impl Into<Box<str>>,
+    ) -> Self {
+        Self { actor, common_name: common_name.into(), subject: None }
     }
 
-    /// Add a server-selected stable subject URI and the grpc.access grant.
+    /// Name the account with a stable subject URI, the same in every
+    /// certificate of the account.
     pub fn with_subject(
         mut self,
         subject: SubjectUri,
@@ -60,9 +73,22 @@ impl GrpcUser {
         self
     }
 
-    pub(crate) fn into_parts(self) -> (AnyAuthenticated, Option<SubjectUri>) {
-        (self.actor, self.subject)
+    pub(crate) fn into_parts(
+        self
+    ) -> (AnyAuthenticated, Box<str>, Option<SubjectUri>) {
+        (self.actor, self.common_name, self.subject)
     }
+}
+
+/// One enrollment, as the client asks for it.
+#[non_exhaustive]
+pub struct EnrollRequest<'a> {
+    /// What the client presents.
+    pub credential: &'a Credential,
+    /// The client's label for the device it enrolls, a DNS label such as
+    /// `bison-cli`. A guard may name the certificate after it; it proves
+    /// nothing.
+    pub device: Option<&'a str>,
 }
 
 /// What a client presents to enroll, chosen by the client. Which kinds a
@@ -99,14 +125,14 @@ impl std::fmt::Display for Presenter<'_> {
     }
 }
 
-/// Verify a credential and authorize grpc.access before returning a GrpcUser.
-/// Applications own credential verification, access policy and account
-/// status.
+/// Verify a credential and name the certificate before returning a GrpcUser.
+/// Applications own credential verification, access policy, account status
+/// and how their certificates are named.
 #[async_trait]
 pub trait EnrollGuard: Send + Sync + 'static {
     async fn authorize(
         &self,
-        credential: &Credential,
+        request: &EnrollRequest<'_>,
     ) -> Result<GrpcUser, AccessError>;
 }
 
@@ -297,7 +323,21 @@ impl HostHandler for EnrollHandler {
 #[serde(deny_unknown_fields)]
 struct Enrollment {
     credential: Credential,
+    #[serde(default)]
+    device: Option<String>,
     csr_der: String,
+}
+
+/// A device label as DNS names a label: 1 to 63 lowercase letters, digits
+/// and hyphens, starting and ending with a letter or digit.
+fn is_device_label(label: &str) -> bool {
+    let bytes = label.as_bytes();
+    (1..=63).contains(&bytes.len())
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-'
+        })
+        && bytes.first() != Some(&b'-')
+        && bytes.last() != Some(&b'-')
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -438,7 +478,14 @@ async fn enroll(
     let Ok(csr) = Base64::decode_vec(&input.csr_der) else {
         return reply(StatusCode::BAD_REQUEST, empty_body());
     };
-    let user = match guard.authorize(&input.credential).await {
+    if input.device.as_deref().is_some_and(|device| !is_device_label(device)) {
+        return reply(StatusCode::BAD_REQUEST, empty_body());
+    }
+    let request = EnrollRequest {
+        credential: &input.credential,
+        device: input.device.as_deref(),
+    };
+    let user = match guard.authorize(&request).await {
         Ok(user) => user,
         Err(AccessError::Unauthenticated) => {
             tracing::warn!(

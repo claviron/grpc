@@ -64,7 +64,9 @@ async fn enrollment_persists_only_public_material_and_reuses_the_same_device() {
         .to_vec()
     };
     let csr = request();
-    let user = || crate::enroll::GrpcUser::new(Arc::new(Operator));
+    let user = || {
+        crate::enroll::GrpcUser::new(Arc::new(Operator), "operator.bison-cli")
+    };
     let validity = NonZeroU32::new(1).unwrap();
     let chain =
         manager.register_client(user(), csr.clone(), validity).await.unwrap();
@@ -74,8 +76,12 @@ async fn enrollment_persists_only_public_material_and_reuses_the_same_device() {
         manager.register_client(user(), csr, validity).await.unwrap(),
         chain
     );
-    let stored =
-        store.certificate_by_cn("operator").await.unwrap().unwrap().certificate;
+    let stored = store
+        .certificate_by_cn("operator.bison-cli")
+        .await
+        .unwrap()
+        .unwrap()
+        .certificate;
     assert!(stored.key_der.is_none());
     let rejected =
         manager.register_client(user(), request(), validity).await.unwrap_err();

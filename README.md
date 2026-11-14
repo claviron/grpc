@@ -202,12 +202,19 @@ that supports gRPC over H3.
 
 Build with `enroll` and register an `EnrollGuard` with
 `server::management::enroll::register_guard`. The guard verifies the
-`Credential` a client presents and grants `grpc.access` by returning a
-`GrpcUser`. The client chooses the kind, a password or a token the
-application issued; the guard accepts the kinds it supports and refuses the
-rest as it refuses a credential that does not verify. A guard can issue a CN-only identity
-or attach a stable subject URI. The latter includes the signed `grpc.access`
-grant. The role and permission manager remains optional.
+`Credential` a client presents and returns a `GrpcUser`. The client chooses
+the kind, a password or a token the application issued; the guard accepts the
+kinds it supports and refuses the rest as it refuses a credential that does
+not verify.
+
+A certificate names one credential, a device, and carries identity only. The
+guard chooses its common name, unique among the hosting store's
+certificates, often from the device label the client sends: `ada.bison-cli`
+for the account `ada` enrolling from `claviron-client` on `bison`. A stable
+subject URI names the account, the same in every certificate it holds, so an
+account can enroll several devices and each is revoked alone. What the account
+may do stays with the application and is decided when a client connects; no
+permission is signed into the certificate.
 
 Enrollment is a session profile: a host offers it by listing its ALPN id,
 `claviron-mtls-enroll/1`, and a client that offers that id gets a handshake
@@ -252,12 +259,14 @@ enrollment and management address selection. It returns 204 when a
 management address is available or 503 otherwise. Both responses carry
 `Claviron-Mtls-Enroll: 1`.
 
-Send `POST /.well-known/claviron/mtls-enroll` with JSON fields `credential`
-and `csr_der` (base64 PKCS#10 DER). The credential names its kind:
+Send `POST /.well-known/claviron/mtls-enroll` with JSON fields `credential`,
+optional `device` and `csr_der` (base64 PKCS#10 DER). The credential names
+its kind; the device is one DNS label, 1 to 63 lowercase letters, digits and
+hyphens:
 
 ```json
-{"credential": {"password": {"username": "ada", "password": "…"}}, "csr_der": "…"}
-{"credential": {"token": "…"}, "csr_der": "…"}
+{"credential": {"password": {"username": "ada", "password": "…"}}, "device": "bison-cli", "csr_der": "…"}
+{"credential": {"token": "…"}, "device": "iphone-app", "csr_der": "…"}
 ```
 
 HTTP 201 returns
@@ -271,7 +280,8 @@ endpoint. The signer uses the CSR's verified public key and takes the
 certificate identity from the guard. The private key stays on the device.
 Hosting keeps the public certificate for revocation. Retrying with the same
 authorized identity and key returns the existing active certificate. A
-different key for an occupied CN returns HTTP 409.
+different key for an occupied CN returns HTTP 409: the device's certificate is
+revoked, or another device label chosen, before it enrolls again.
 
 ## Lifecycle and trust boundaries
 
