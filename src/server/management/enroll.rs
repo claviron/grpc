@@ -294,6 +294,11 @@ impl Bootable<AppState, (Arc<CertificateProvider>, Arc<VhostResolver>)>
 struct EnrollParams {
     /// Days an issued certificate is valid.
     validity_days: NonZeroU32,
+    /// What a certificate enrolled on this host may be granted beside its
+    /// account's own: the bound a client's request meets. Unwritten, nothing.
+    #[cfg(feature = "authorization")]
+    #[serde(default)]
+    permissions: Vec<Permission>,
 }
 
 impl SessionProfile for EnrollProfile {
@@ -338,11 +343,32 @@ impl SessionProfile for EnrollProfile {
                 registry::Error::msg("mTLS enrollment requires an EnrollGuard")
             })?;
         let params: EnrollParams = plan.params()?;
+        #[cfg(feature = "authorization")]
+        let grantable = if params.permissions.is_empty() {
+            Permissions::default()
+        } else {
+            state
+                .registry_ref()
+                .resolve::<PermissionCatalog>()
+                .ok_or_else(|| {
+                    registry::Error::msg(
+                        "mTLS enrollment permissions need a permission catalog",
+                    )
+                })?
+                .validate(&params.permissions)
+                .map_err(|error| {
+                    registry::Error::msg(format!(
+                        "mTLS enrollment permissions: {error}"
+                    ))
+                })?
+        };
         let handler = EnrollHandler {
             state: state.clone(),
             guard,
             management_hosts: self.grpc.config().vhosts().to_vec().into(),
             validity_days: params.validity_days,
+            #[cfg(feature = "authorization")]
+            grantable: Arc::new(grantable),
             timeout: plan.policy().responses.idle_timeout,
         };
         plan.backend(handler)
@@ -354,6 +380,9 @@ struct EnrollHandler {
     guard: Arc<dyn EnrollGuard>,
     management_hosts: Arc<[Host]>,
     validity_days: NonZeroU32,
+    /// The bound of what a certificate enrolled here may be granted.
+    #[cfg(feature = "authorization")]
+    grantable: Arc<Permissions>,
     /// The host's response idle timeout, fixed when the session is prepared.
     timeout: Option<std::time::Duration>,
 }
@@ -373,6 +402,8 @@ impl HostHandler for EnrollHandler {
         let guard = self.guard.clone();
         let management_hosts = self.management_hosts.clone();
         let validity_days = self.validity_days;
+        #[cfg(feature = "authorization")]
+        let grantable = self.grantable.clone();
         let timeout = self.timeout;
         Box::pin(async move {
             let response = head_within(
@@ -383,6 +414,8 @@ impl HostHandler for EnrollHandler {
                     guard.as_ref(),
                     validity_days,
                     &management_hosts,
+                    #[cfg(feature = "authorization")]
+                    &grantable,
                 ),
             )
             .await
@@ -485,6 +518,7 @@ async fn enroll(
     guard: &dyn EnrollGuard,
     validity_days: NonZeroU32,
     management_hosts: &[Host],
+    #[cfg(feature = "authorization")] grantable: &Permissions,
 ) -> RouteResponse {
     if request.method() == Method::HEAD {
         let status = if management_address(state, management_hosts).is_some() {
@@ -565,6 +599,15 @@ async fn enroll(
         Some(permissions) => permissions,
         None => return reply(StatusCode::BAD_REQUEST, empty_body()),
     };
+    // What a client asks must be within what this host grants.
+    #[cfg(feature = "authorization")]
+    if !within(&permissions, grantable) {
+        tracing::warn!(
+            "mTLS enrollment refused permissions this host does not grant, asked by {} from {client}",
+            input.credential.presenter()
+        );
+        return reply(StatusCode::FORBIDDEN, empty_body());
+    }
     let request = EnrollRequest {
         credential: &input.credential,
         device: &input.device,
@@ -595,6 +638,14 @@ async fn enroll(
             return reply(StatusCode::SERVICE_UNAVAILABLE, empty_body());
         }
     };
+    // A guard grants within the same bound.
+    #[cfg(feature = "authorization")]
+    if !within(&user.permissions, grantable) {
+        tracing::error!(
+            "mTLS enrollment guard granted permissions this host does not grant"
+        );
+        return reply(StatusCode::INTERNAL_SERVER_ERROR, empty_body());
+    }
     let Some(management_address) = management_address(state, management_hosts)
     else {
         tracing::warn!(
@@ -658,6 +709,15 @@ async fn enroll(
             reply(status, empty_body())
         }
     }
+}
+
+/// Whether every one of `permissions` is in `bound`.
+#[cfg(feature = "authorization")]
+fn within(
+    permissions: &Permissions,
+    bound: &Permissions,
+) -> bool {
+    permissions.iter().all(|permission| bound.contains_name(permission))
 }
 
 /// What a request asks, each name defined in the server's catalog; `None`

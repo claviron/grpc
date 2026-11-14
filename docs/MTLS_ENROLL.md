@@ -22,7 +22,13 @@ grpc.example.com:
     alpn:
       claviron-mtls-enroll/1:
         validity_days: 30          # how long an issued certificate is valid
+        permissions: [deploy.release]   # with authorization: the most a
+                                         # certificate enrolled here is granted
 ```
+
+`permissions` bounds what a certificate enrolled on the host may be granted
+beside its account's own; unwritten, nothing. Each name must be defined in the
+server's catalog, or the host's preparation is refused.
 
 A client offering the id gets a handshake that asks for no client
 certificate and reaches enrollment alone; an ordinary connection to the same
@@ -57,7 +63,7 @@ else on this path is for them.
 | --- | --- |
 | `credential` | What the client presents, by kind: `{"password": {"username", "password"}}` or `{"token": "…"}`. The server's application accepts the kinds it supports. |
 | `device` | The client's label for this device: one DNS label, 1 to 63 lowercase letters, digits and hyphens, not starting or ending with a hyphen. Clients derive `<short-hostname>-<client>`, such as `bison-cli` or `bison-app`. A label proves nothing; it names. |
-| `permissions` | Optional, only on a server built with `authorization`: permission names from the server's catalog, asked for this certificate beside the account's own. Asking grants nothing. A server that cannot grant permissions refuses a request naming them. |
+| `permissions` | Optional, only on a server built with `authorization`: permission names from the server's catalog, asked for this certificate beside the account's own. A request must stay within the host's `permissions`; asking grants nothing, the guard decides within the same bound. A server that cannot grant permissions refuses a request naming them. |
 | `csr_der` | A PKCS#10 request, base64 DER, signed with the device key. Its subject and attributes are ignored: the server takes its public key. |
 
 Unknown fields are refused. A `201` answers:
@@ -78,7 +84,7 @@ to the root, then trusts that root for the management address.
 | --- | --- |
 | `201` | Issued, or the device's certificate returned again for the same key. |
 | `400` | Malformed: a field, the device label, the request's signature, or a permission the server does not define. |
-| `401`, `403` | The credential does not verify, or the account may not enroll. One answer for both is acceptable; the server's log says which. |
+| `401`, `403` | The credential does not verify, the account may not enroll, or the request asks for a permission the host does not grant. The server's log says which. |
 | `409` | The certificate's name is taken by another key: revoke that device's certificate, or choose another label. |
 | `415` | Not JSON. |
 | `503` | No signer, no management address, the application's policy or record unavailable. |

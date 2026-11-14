@@ -44,3 +44,22 @@ fn a_device_label_is_one_dns_label() {
         assert!(!is_device_label(refused), "{refused}");
     }
 }
+
+#[cfg(feature = "authorization")]
+#[test]
+fn a_request_stays_within_what_the_host_grants() {
+    use claviron::auth::permission::PermissionCatalog;
+
+    let mut catalog = PermissionCatalog::new();
+    for name in ["deploy.release", "backup.restore"] {
+        catalog.register_name(name).unwrap();
+    }
+    let bound = catalog.validate(["deploy.release"]).unwrap();
+    let asked = |names: &[&str]| catalog.validate(names).unwrap();
+    assert!(super::within(&asked(&[]), &bound));
+    assert!(super::within(&asked(&["deploy.release"]), &bound));
+    assert!(!super::within(
+        &asked(&["deploy.release", "backup.restore"]),
+        &bound
+    ));
+}

@@ -217,8 +217,9 @@ stays with the application and is decided when a client connects; no
 permission is signed into the certificate.
 
 With `authorization`, a client may also ask for permissions defined in the
-server's catalog, for connections presenting this certificate only. The guard
-grants what it allows with `GrpcUser::with_permissions`, and records them in
+server's catalog, for connections presenting this certificate only, within
+the bound the host's `permissions` parameter sets. The guard grants what it
+allows within the same bound with `GrpcUser::with_permissions`, and records them in
 `EnrollGuard::enrolled`, called once the certificate is issued; its access
 policy applies them when such a connection is admitted. [mTLS
 Enrollment](docs/MTLS_ENROLL.md) is the protocol's contract.
