@@ -174,11 +174,11 @@ impl MtlsManager {
                 "disabled certificates cannot be renewed",
             ));
         }
-        if original.key_der.is_empty() {
+        let Some(key_der) = original.key_der.clone() else {
             return Err(Status::failed_precondition(
                 "this client certificate requires a new device-signed request",
             ));
-        }
+        };
         let peer = claviron::ssl::peer::peer_identity(&original.certs_der)
             .map_err(|_| {
                 Status::failed_precondition(
@@ -269,12 +269,12 @@ impl MtlsManager {
             match issuer {
                 Some(signer) => signer.renew_certificate(
                     leaf,
-                    &previous.key_der,
+                    &key_der,
                     request.validity_days,
                 ),
                 None => Ok(claviron::ssl::renewal::renew_certificate(
                     leaf,
-                    &previous.key_der,
+                    &key_der,
                     None,
                     request.validity_days,
                 )?),
@@ -460,10 +460,9 @@ impl MtlsManager {
             Vec::new(),
             Some(issuer),
             None,
-            claviron::tls::IssuedCertificate {
-                certs_der: certs_der.clone(),
-                key_der: Vec::new(),
-            },
+            certs_der.clone(),
+            // Signed from the device's request: its key never left the device.
+            None,
         )
         .await;
         let certificate_chain_pem = match stored {
@@ -482,7 +481,7 @@ impl MtlsManager {
                     || saved.issuer_id != Some(issuer)
                     || !saved.enabled
                     || saved.revoked_at.is_some()
-                    || !saved.key_der.is_empty()
+                    || saved.key_der.is_some()
                     || saved.expires_at <= OffsetDateTime::now_utc()
                     || !same_registration_identity(&saved.certs_der, &certs_der)
                 {
@@ -540,7 +539,8 @@ impl MtlsManager {
             vec![name.into()],
             None,
             None,
-            material,
+            material.certs_der,
+            Some(material.key_der),
         )
         .await?;
         Ok(info)
@@ -651,7 +651,8 @@ impl MtlsManager {
             aliases,
             Some(issuer_id),
             server_id,
-            material,
+            material.certs_der,
+            Some(material.key_der),
         )
         .await?;
         Ok(info)
@@ -849,9 +850,10 @@ async fn persist(
     aliases: Vec<String>,
     issuer_id: Option<i32>,
     server_id: Option<i32>,
-    material: claviron::tls::authority::IssuedCertificate,
+    certs_der: Vec<u8>,
+    key_der: Option<Vec<u8>>,
 ) -> Result<CertificateInfo, Status> {
-    let leaf = take_first_cert_from_der(&material.certs_der).map_err(|_| {
+    let leaf = take_first_cert_from_der(&certs_der).map_err(|_| {
         Status::internal("issued certificate could not be parsed")
     })?;
     let issued_at = OffsetDateTime::from_unix_timestamp(
@@ -866,8 +868,8 @@ async fn persist(
         kind,
         issuer_id,
         cn: common_name.into(),
-        certs_der: material.certs_der,
-        key_der: material.key_der,
+        certs_der,
+        key_der,
         issued_at,
         expires_at,
         enabled: true,

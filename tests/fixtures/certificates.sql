@@ -12,7 +12,7 @@ CREATE TABLE hosting_certificate_issuers (
 CREATE TABLE hosting_certificates (
  id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('server','client','ca')),
  issuer_id INTEGER REFERENCES hosting_certificate_issuers(id), cn TEXT NOT NULL UNIQUE,
- certs_der BLOB NOT NULL, key_der BLOB NOT NULL, expires_at TEXT NOT NULL, issued_at TEXT NOT NULL,
+ certs_der BLOB NOT NULL, key_der BLOB CHECK (key_der IS NULL OR length(key_der) > 0), expires_at TEXT NOT NULL, issued_at TEXT NOT NULL,
  updated_at TEXT, revoked_at TEXT, enabled INTEGER NOT NULL, CHECK (issuer_id IS NOT NULL OR kind='ca')
 );
 CREATE TABLE hosting_cert_aliases (

@@ -77,7 +77,7 @@ async fn registration_persists_only_public_material_and_reuses_the_same_device()
     );
     let stored =
         store.certificate_by_cn("operator").await.unwrap().unwrap().certificate;
-    assert!(stored.key_der.is_empty());
+    assert!(stored.key_der.is_none());
     let rejected =
         manager.register_client(user(), request(), validity).await.unwrap_err();
     assert_eq!(rejected.code(), tonic::Code::AlreadyExists);
@@ -282,7 +282,7 @@ async fn ca_server_and_client_material_stays_in_database() {
             }
         );
         let saved = store.certificate_by_id(info.id).await.unwrap().unwrap();
-        assert!(!saved.key_der.is_empty());
+        assert!(saved.key_der.is_some());
         assert_eq!(saved.kind, kind);
         let peer =
             claviron::ssl::peer::peer_identity(&saved.certs_der).unwrap();

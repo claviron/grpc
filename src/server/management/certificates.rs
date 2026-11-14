@@ -118,7 +118,7 @@ impl CertificateManager {
             issuer_id: plan.issuer_id,
             cn: plan.common_name.into(),
             certs_der: plan.certs_der,
-            key_der: plan.key_der,
+            key_der: Some(plan.key_der),
             expires_at: plan.expires_at,
             issued_at: plan.issued_at,
             enabled: true,
@@ -157,17 +157,13 @@ impl CertificateManager {
             .map_err(|_| {
                 Status::internal("stored certificate chain is invalid")
             })?;
-            let key = if request.include_private_key
-                && !saved.certificate.key_der.is_empty()
-            {
-                Some(
-                    transfer::private_key_to_pem(&saved.certificate.key_der)
-                        .map_err(|_| {
-                            Status::internal("stored private key is invalid")
-                        })?,
-                )
-            } else {
-                None
+            let key = match &saved.certificate.key_der {
+                Some(key_der) if request.include_private_key => {
+                    Some(transfer::private_key_to_pem(key_der).map_err(
+                        |_| Status::internal("stored private key is invalid"),
+                    )?)
+                }
+                _ => None,
             };
             Ok(ExportCertificateResponse {
                 certificate: Some(transfer_info(saved, issuer)),

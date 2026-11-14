@@ -228,7 +228,7 @@ async fn acme_import_is_rejected_but_existing_material_can_be_exported() {
                 issuer_id: Some(issuer.id),
                 cn: plan.common_name.into(),
                 certs_der: plan.certs_der,
-                key_der: plan.key_der,
+                key_der: Some(plan.key_der),
                 expires_at: plan.expires_at,
                 issued_at: plan.issued_at,
                 enabled: true,

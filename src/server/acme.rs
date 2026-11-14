@@ -567,7 +567,7 @@ mod tests {
                     issuer_id: Some(2),
                     cn: "example.test".to_owned(),
                     certs_der: Vec::new(),
-                    key_der: Vec::new(),
+                    key_der: None,
                     expires_at,
                     issued_at,
                     updated_at: Some(updated_at),
