@@ -466,7 +466,9 @@ pub(crate) struct Issued {
 }
 
 #[derive(Serialize)]
-struct EnrollResponse {
+struct EnrollResponse<'a> {
+    /// The server's own name, which a client names its profile after.
+    server_name: &'a str,
     management_address: Box<str>,
     #[serde(flatten)]
     issued: Issued,
@@ -678,6 +680,7 @@ async fn enroll(
                 input.credential.presenter()
             );
             let Ok(body) = serde_json::to_vec(&EnrollResponse {
+                server_name: state.name(),
                 management_address,
                 issued,
             }) else {

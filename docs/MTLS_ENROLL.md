@@ -70,14 +70,16 @@ Unknown fields are refused. A `201` answers:
 
 ```json
 {
+  "server_name": "edge-1",
   "management_address": "https://admin.example.com",
   "certificate_chain_pem": "-----BEGIN CERTIFICATE-----…",
   "authority_certificate_pem": "-----BEGIN CERTIFICATE-----…"
 }
 ```
 
-The chain holds the client's certificate and any intermediates; the authority
-is the root. The client checks that the certificate is for its key and chains
+`server_name` is the server's own name, the one its management API reports;
+a client names the profile it keeps for this server after it. The chain holds
+the client's certificate and any intermediates; the authority is the root. The client checks that the certificate is for its key and chains
 to the root, then trusts that root for the management address.
 
 | Status | Meaning |

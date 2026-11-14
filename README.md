@@ -278,6 +278,7 @@ to 63 lowercase letters, digits and hyphens:
 ```
 
 HTTP 201 returns
+`server_name` (the server's own name, for the client's profile),
 `management_address`, `certificate_chain_pem` (the client leaf and any
 intermediates), and `authority_certificate_pem` (the root CA). The address
 uses the first concrete SNI served over TLS/H2 from the configured `vhosts`
