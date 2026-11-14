@@ -125,7 +125,8 @@ impl AcmeManager for AcmeService {
             Status::invalid_argument("At least one alias is required")
         })?;
         let config = self.acme_config()?;
-        let challenge = self.acme.order_challenge(&config, None).map_err(acme_status)?;
+        let challenge =
+            self.acme.order_challenge(&config, None).map_err(acme_status)?;
         let result = add_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
@@ -182,16 +183,22 @@ impl AcmeManager for AcmeService {
         let cn = Sni::from_str(&req.cn).map_err(|error| {
             Status::invalid_argument(format!("Invalid SNI: {error}"))
         })?;
+        // The protocol carries whole days; the engine takes a duration.
         let renew_before = req
             .renew_before
-            .map(|value| {
-                u32::try_from(value).map_err(|_| {
-                    Status::invalid_argument("renew_before is out of range")
-                })
+            .map(|days| {
+                u64::try_from(days)
+                    .ok()
+                    .and_then(|days| days.checked_mul(86_400))
+                    .map(std::time::Duration::from_secs)
+                    .ok_or_else(|| {
+                        Status::invalid_argument("renew_before is out of range")
+                    })
             })
             .transpose()?;
         let config = self.acme_config()?;
-        let challenge = self.acme.order_challenge(&config, None).map_err(acme_status)?;
+        let challenge =
+            self.acme.order_challenge(&config, None).map_err(acme_status)?;
         let (certificate, content) = renew_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
