@@ -15,12 +15,11 @@ pub struct GrpcConfig {
     pub user_management: Option<super::management::Limits>,
     #[serde(default, deserialize_with = "one_or_many", alias = "vhost")]
     vhosts: Vec<Host>,
-    #[cfg(feature = "registration")]
-    #[serde(default, deserialize_with = "one_or_many")]
-    pub(crate) registration: Vec<Host>,
-    #[cfg(feature = "registration")]
+    /// Days a certificate issued by mTLS enrollment is valid. Required on a
+    /// server whose hosts offer `claviron-mtls-enroll/1`.
+    #[cfg(feature = "enroll")]
     #[serde(default)]
-    pub(crate) registration_validity_days: Option<std::num::NonZeroU32>,
+    pub(crate) enroll_validity_days: Option<std::num::NonZeroU32>,
 }
 
 impl GrpcConfig {

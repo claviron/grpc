@@ -82,8 +82,8 @@ impl Register<AppState> for GrpcServiceProvider {
                 )
             },
         )?;
-        #[cfg(feature = "registration")]
-        super::management::registration::register_routes(state, provider)?;
+        #[cfg(feature = "enroll")]
+        super::management::enroll::register_profile(state, provider)?;
         Ok(())
     }
 }
@@ -128,27 +128,6 @@ impl Configurable for GrpcServiceProvider {
         config: &GrpcConfig,
     ) -> congif::Result<()> {
         self.apply(config);
-        Ok(())
-    }
-
-    #[cfg(feature = "registration")]
-    fn validate_config(
-        &self,
-        config: &GrpcConfig,
-    ) -> congif::Result<()> {
-        if config.registration.iter().any(|host| config.vhosts().contains(host))
-        {
-            return Err(congif::Error::invalid(
-                "gRPC registration and management require different vhosts",
-            ));
-        }
-        if !config.registration.is_empty()
-            && config.registration_validity_days.is_none()
-        {
-            return Err(congif::Error::invalid(
-                "registration_validity_days is required for registration",
-            ));
-        }
         Ok(())
     }
 }

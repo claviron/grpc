@@ -2,10 +2,10 @@
 
 #[cfg(feature = "certificate-manager")]
 pub mod certificates;
+#[cfg(feature = "enroll")]
+pub mod enroll;
 #[cfg(feature = "mtls-manager")]
 pub mod mtls;
-#[cfg(feature = "registration")]
-pub mod registration;
 #[cfg(any(feature = "users", feature = "authorization"))]
 pub(crate) mod users;
 

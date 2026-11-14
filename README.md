@@ -27,7 +27,7 @@ Default features are empty.
 | Feature | Adds |
 | --- | --- |
 | `server` | Provider and management serving on Edge vhosts. |
-| `registration` | HTTPS enrollment of device-owned mTLS keys through an application guard. |
+| `enroll` | mTLS enrollment of device-owned keys through an application guard, offered by ALPN. |
 | `workers` | Worker inspection, lifecycle commands, rolling restart, and fleet resize; includes `server`. |
 | `tasks` | Task-management routes when combined with `server`, plus Claviron's task capability. |
 | `acme` | ACME persistence dependency and ACME RPCs when combined with `server`. |
@@ -198,51 +198,64 @@ bounds every other gap in the reply, including access policy and RPC execution
 (`DEADLINE_EXCEEDED` on expiry). Edge's request-body policy applies separately. H3 requires Claviron's `http3` feature and a client
 that supports gRPC over H3.
 
-## Client enrollment
+## mTLS enrollment
 
-Build with `registration` and register a `RegistrationGuard` with
-`server::management::registration::register_guard`. The guard verifies credentials and grants
+Build with `enroll` and register an `EnrollGuard` with
+`server::management::enroll::register_guard`. The guard verifies credentials and grants
 `grpc.access` by returning a `GrpcUser`. A guard can issue a CN-only identity
 or attach a stable subject URI. The latter includes the signed `grpc.access`
 grant. The role and permission manager remains optional.
 
+Enrollment is a session profile: a host offers it by listing its ALPN id,
+`claviron-mtls-enroll/1`, and a client that offers that id gets a handshake
+without a client certificate and reaches enrollment alone. The same host keeps
+mutual TLS for ordinary HTTP/2, so enrollment and management can share it.
+
 ```yaml
-vhosts: [management]
-registration: [enrollment]
-registration_validity_days: 30
+# grpc.yaml
+vhosts: [grpc.example.com]
+enroll_validity_days: 30
 ```
 
-The enrollment vhost needs HTTPS without mandatory client authentication.
-Management requires mTLS. Select the default issuer with `certstore.authority`.
-The registration provider prepares its signer at boot. A DB authority uses
-the selected Hosting issuer. A file authority uses the CertStore CA pair
-and its chain through the root. For an explicit file pair, set `cert_path`,
-`key_path`, and, if needed, `ca_path` inside `authority`. Hosting retains the
-public CA hierarchy and issued client certificates. An explicit issuer in a
-management issuance RPC selects a Hosting signing key.
+```yaml
+# the host declaration
+grpc.example.com:
+  tls:
+    client_auth: required
+    alpn: [claviron-mtls-enroll/1]
+```
 
-The management vhost must trust this issuer for client authentication.
-Its server certificate must also chain to the returned root. Use Edge's
-request policy and quota for the enrollment host.
+Certificates are issued only from a Hosting CA stored with its signing key,
+selected with `certstore.authority`; a file authority verifies clients but
+does not issue. The profile prepares its signer at boot when a host offers
+it. A host that starts offering enrollment later takes a restart. Hosting
+retains the public CA hierarchy and issued client certificates. An explicit
+issuer in a management issuance RPC selects a Hosting signing key.
 
-An unauthenticated `HEAD /.well-known/claviron/grpc-registration` checks
-the registration route and management address selection. It returns 204
-when a management address is available or 503 otherwise. Both responses
-carry `Claviron-Registration: 1`.
+The management host must trust this issuer for client authentication. Its
+server certificate must also chain to the returned root. An enrollment
+session takes the host's HTTP request policy, such as body and timeout
+bounds; the host's routes, files and layers, its quota included, are not
+part of it.
 
-Send `POST /.well-known/claviron/grpc-registration` with JSON fields
-`username`, `password`, and `csr_der` (base64 PKCS#10 DER). HTTP 201 returns
+An unauthenticated `HEAD /.well-known/claviron/mtls-enroll` checks
+enrollment and management address selection. It returns 204 when a
+management address is available or 503 otherwise. Both responses carry
+`Claviron-Mtls-Enroll: 1`.
+
+Send `POST /.well-known/claviron/mtls-enroll` with JSON fields `username`,
+`password`, and `csr_der` (base64 PKCS#10 DER). HTTP 201 returns
 `management_address`, `certificate_chain_pem` (the client leaf and any
 intermediates), and `authority_certificate_pem` (the root CA). The address
 uses the first concrete SNI served over TLS/H2 from the configured `vhosts`
 in order, trying each canonical name before its aliases. Port 443 takes
 precedence when available for that name. The client obtains the root over
-system-verified enrollment HTTPS and uses it to verify the management endpoint.
-The signer uses the CSR's verified public key and
-takes the certificate identity from the guard. The private key stays on the
-device. Hosting keeps the public certificate for revocation. Retrying with
-the same authorized identity and key returns the existing active certificate.
-A different key for an occupied CN returns HTTP 409.
+system-verified HTTPS during enrollment and uses it to verify the management
+endpoint. The signer uses the CSR's verified public key and takes the
+certificate identity from the guard. The private key stays on the device.
+Hosting keeps the public certificate for revocation. Retrying with the same
+authorized identity and key returns the existing active certificate. A
+different key for an occupied CN returns HTTP 409.
 
 ## Lifecycle and trust boundaries
 

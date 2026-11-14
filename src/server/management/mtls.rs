@@ -386,42 +386,42 @@ impl MtlsManager {
         }))
     }
 
-    #[cfg(feature = "registration")]
-    pub(crate) async fn prepare_registration_signer(
+    #[cfg(feature = "enroll")]
+    pub(crate) async fn prepare_enroll_signer(
         state: &AppState
     ) -> Result<Arc<ManagedSigner>, Status> {
         let managed = Self::from_state(state)?.default_signer().await?;
-        registration_root(managed.signer.authority())?;
+        enroll_root(managed.signer.authority())?;
         Ok(managed)
     }
 
-    #[cfg(feature = "registration")]
+    #[cfg(feature = "enroll")]
     pub(crate) async fn register_client(
         &self,
-        user: super::registration::GrpcUser,
+        user: super::enroll::GrpcUser,
         csr: Vec<u8>,
         validity_days: std::num::NonZeroU32,
-    ) -> Result<super::registration::Issued, Status> {
+    ) -> Result<super::enroll::Issued, Status> {
         use claviron::auth::permission::PermissionDefinition;
         use claviron::ssl::formatters::certificate_chain_to_pem;
 
         let (actor, subject) = user.into_parts();
         let name =
             actor.auth_identifier().parse::<CommonName>().map_err(|_| {
-                Status::failed_precondition("invalid registration identity")
+                Status::failed_precondition("invalid enrollment identity")
             })?;
         let permissions = if subject.is_some() {
             let mut catalog = PermissionCatalog::new();
             catalog
                 .register_name(crate::permission::GrpcAccess::NAME)
                 .map_err(|_| {
-                    Status::internal("invalid registration permission")
+                    Status::internal("invalid enrollment permission")
                 })?;
             Some(
                 catalog
                     .validate([crate::permission::GrpcAccess::NAME])
                     .map_err(|_| {
-                        Status::internal("invalid registration permission")
+                        Status::internal("invalid enrollment permission")
                     })?,
             )
         } else {
@@ -431,9 +431,9 @@ impl MtlsManager {
         let issuer = managed.issuer_id();
         let signer = managed.signer.clone();
         let authority_certificate_pem =
-            certificate_chain_to_pem(registration_root(signer.authority())?)
+            certificate_chain_to_pem(enroll_root(signer.authority())?)
                 .map_err(|_| {
-                    Status::failed_precondition("registration root is invalid")
+                    Status::failed_precondition("enrollment root is invalid")
                 })?;
         let signing_name = name.clone();
         let certs_der = tokio::task::spawn_blocking(move || {
@@ -446,12 +446,12 @@ impl MtlsManager {
             )
         })
         .await
-        .map_err(|_| Status::internal("registration signing task failed"))?
+        .map_err(|_| Status::internal("enrollment signing task failed"))?
         .map_err(|_| {
             Status::invalid_argument("certificate request could not be signed")
         })?;
         let chain = certificate_chain_to_pem(&certs_der).map_err(|_| {
-            Status::internal("registration certificate chain is invalid")
+            Status::internal("enrollment certificate chain is invalid")
         })?;
         let stored = persist(
             &self.store,
@@ -483,19 +483,19 @@ impl MtlsManager {
                     || saved.revoked_at.is_some()
                     || saved.key_der.is_some()
                     || saved.expires_at <= OffsetDateTime::now_utc()
-                    || !same_registration_identity(&saved.certs_der, &certs_der)
+                    || !same_enrolled_identity(&saved.certs_der, &certs_der)
                 {
                     return Err(error);
                 }
                 certificate_chain_to_pem(&saved.certs_der).map_err(|_| {
                     Status::internal(
-                        "stored registration certificate chain is invalid",
+                        "stored enrollment certificate chain is invalid",
                     )
                 })?
             }
             Err(error) => return Err(error),
         };
-        Ok(super::registration::Issued {
+        Ok(super::enroll::Issued {
             certificate_chain_pem,
             authority_certificate_pem,
         })
@@ -659,29 +659,29 @@ impl MtlsManager {
     }
 }
 
-#[cfg(feature = "registration")]
-fn registration_root(authority: &CertAuthority) -> Result<&[u8], Status> {
+#[cfg(feature = "enroll")]
+fn enroll_root(authority: &CertAuthority) -> Result<&[u8], Status> {
     let root = authority
         .roots()
         .last()
         .ok_or_else(|| {
-            Status::failed_precondition("registration CA has no root")
+            Status::failed_precondition("enrollment CA has no root")
         })?
         .as_ref();
     let parsed = take_first_cert_from_der(root).map_err(|_| {
-        Status::failed_precondition("registration root is invalid")
+        Status::failed_precondition("enrollment root is invalid")
     })?;
     if !parsed.is_ca()
         || parsed.subject() != parsed.issuer()
         || parsed.verify_signature(None).is_err()
     {
-        return Err(Status::failed_precondition("registration CA has no root"));
+        return Err(Status::failed_precondition("enrollment CA has no root"));
     }
     Ok(root)
 }
 
-#[cfg(feature = "registration")]
-fn same_registration_identity(
+#[cfg(feature = "enroll")]
+fn same_enrolled_identity(
     saved: &[u8],
     candidate: &[u8],
 ) -> bool {

@@ -4,8 +4,8 @@ pub mod access;
 #[cfg(feature = "server")]
 pub mod permission;
 
-#[cfg(feature = "registration")]
-pub use server::management::registration;
+#[cfg(feature = "enroll")]
+pub use server::management::enroll;
 
 #[cfg(feature = "mtls-manager")]
 pub use server::management::mtls as mtls_manager;

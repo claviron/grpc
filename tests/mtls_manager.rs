@@ -1,9 +1,8 @@
 use super::*;
 
-#[cfg(feature = "registration")]
+#[cfg(feature = "enroll")]
 #[tokio::test]
-async fn registration_persists_only_public_material_and_reuses_the_same_device()
-{
+async fn enrollment_persists_only_public_material_and_reuses_the_same_device() {
     use std::{any::Any, borrow::Cow, num::NonZeroU32};
 
     use claviron::auth::Authenticated;
@@ -65,7 +64,7 @@ async fn registration_persists_only_public_material_and_reuses_the_same_device()
         .to_vec()
     };
     let csr = request();
-    let user = || crate::registration::GrpcUser::new(Arc::new(Operator));
+    let user = || crate::enroll::GrpcUser::new(Arc::new(Operator));
     let validity = NonZeroU32::new(1).unwrap();
     let chain =
         manager.register_client(user(), csr.clone(), validity).await.unwrap();
