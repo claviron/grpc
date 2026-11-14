@@ -11,7 +11,7 @@ use claviron::ssl::Sni;
 use claviron::ssl::formatters::certificate_chain_to_pem;
 use claviron::tls::{CertResolver, CertificateManager};
 use claviron_acme::actions::database::{
-    add_cert_to_db_with_challenge, renew_cert_to_db_with_challenge,
+    Issuance, add_cert_to_db_with_challenge, renew_cert_to_db_with_challenge,
 };
 use claviron_acme::{AcmeError, AcmeProvider as AcmeConfigService, AcmeStore};
 use tonic::{Request, Response, Status};
@@ -156,9 +156,7 @@ impl AcmeManager for AcmeService {
             self.server_id,
             &cn,
             &aliases,
-            &config,
-            challenge,
-            &client,
+            Issuance { config: &config, client: &client, challenge },
         )
         .await
         .map_err(acme_status)?;
@@ -220,15 +218,14 @@ impl AcmeManager for AcmeService {
         let method = challenge_method(req.method)?;
         let config = self.acme_config()?;
         let challenge = self.order_challenge(&config, method)?;
+        let client = self.client()?;
         let (certificate, content) = renew_cert_to_db_with_challenge(
             &self.acme_store,
             &self.hosting,
-            &config,
             &cn,
             renew_before,
             false,
-            challenge,
-            &self.client()?,
+            Issuance { config: &config, client: &client, challenge },
         )
         .await
         .map_err(acme_status)?;

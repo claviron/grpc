@@ -442,9 +442,8 @@ impl MtlsManager {
             Vec::new(),
             Some(issuer),
             None,
-            certs_der.clone(),
             // Signed from the device's request: its key never left the device.
-            None,
+            Material { certs_der: certs_der.clone(), key_der: None },
         )
         .await;
         let certificate_chain_pem = match stored {
@@ -521,8 +520,7 @@ impl MtlsManager {
             vec![name.into()],
             None,
             None,
-            material.certs_der,
-            Some(material.key_der),
+            material.into(),
         )
         .await?;
         Ok(info)
@@ -633,8 +631,7 @@ impl MtlsManager {
             aliases,
             Some(issuer_id),
             server_id,
-            material.certs_der,
-            Some(material.key_der),
+            material.into(),
         )
         .await?;
         Ok(info)
@@ -825,6 +822,19 @@ fn storage_status(error: HostingError) -> Status {
     }
 }
 
+/// What an issuance produced: the chain, and its private key when this server
+/// holds it.
+struct Material {
+    certs_der: Vec<u8>,
+    key_der: Option<Vec<u8>>,
+}
+
+impl From<claviron::tls::authority::IssuedCertificate> for Material {
+    fn from(issued: claviron::tls::authority::IssuedCertificate) -> Self {
+        Self { certs_der: issued.certs_der, key_der: Some(issued.key_der) }
+    }
+}
+
 async fn persist(
     hosting: &HostingStore,
     kind: CertificateKind,
@@ -832,9 +842,9 @@ async fn persist(
     aliases: Vec<String>,
     issuer_id: Option<i32>,
     server_id: Option<i32>,
-    certs_der: Vec<u8>,
-    key_der: Option<Vec<u8>>,
+    material: Material,
 ) -> Result<CertificateInfo, Status> {
+    let Material { certs_der, key_der } = material;
     let leaf = take_first_cert_from_der(&certs_der).map_err(|_| {
         Status::internal("issued certificate could not be parsed")
     })?;
