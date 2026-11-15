@@ -2,7 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use claviron::runtime::{AppState, ApplicationBuild};
+use claviron::runtime::{AppState, application_build};
 use claviron::supervisor::{
     MasterRuntimeSnapshot, ServerManager as DomainServerManager,
     ServerManagerError, WorkerLifecycle, WorkerManager,
@@ -41,10 +41,8 @@ impl ServerManager for ServerService {
             fleet_name: Some(state.fleet_name().into()),
             hostname: state.hostname().into(),
             claviron_version: claviron::runtime::VERSION.into(),
-            application_version: state
-                .registry_ref()
-                .resolve::<ApplicationBuild>()
-                .map(|build| build.version.clone()),
+            application_version: application_build::version(state)
+                .map(str::to_owned),
             started_at: primary.then_some(started_at).flatten(),
             uptime: primary.then_some(uptime).flatten(),
             reload_revision: primary.then_some(state.reload_count() as u64),
