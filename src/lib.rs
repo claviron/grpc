@@ -67,10 +67,21 @@ pub mod proto {
 #[path = "../tests/users_protocol.rs"]
 mod users_protocol_tests;
 
+/// The management gRPC provider: its registration binds `grpc.yaml`, the
+/// routes, the per-connection access layer and the enrollment profile. Register
+/// it in a bootstrap with `claviron_grpc::GrpcServiceProvider::register(state)`,
+/// through `claviron::Register`.
 #[cfg(feature = "server")]
+pub use server::provider::GrpcServiceProvider;
+
+#[cfg(feature = "server")]
+#[deprecated(
+    since = "0.2.4",
+    note = "name the provider: `GrpcServiceProvider::register(state)` through `claviron::Register`"
+)]
 pub fn register(
     state: &claviron::runtime::AppState
 ) -> claviron::runtime::registry::Result<()> {
     use claviron::runtime::Register;
-    server::provider::GrpcServiceProvider::register(state)
+    GrpcServiceProvider::register(state)
 }
